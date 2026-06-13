@@ -1,11 +1,27 @@
 {
   "name": "kankanban",
   "version": "0.1.0",
+  "description": "A live Kanban board that orchestrates Claude Code — plans features into cards and runs builder/reviewer subagents in isolated git worktrees.",
+  "keywords": [
+    "claude-code",
+    "claude",
+    "kanban",
+    "orchestration",
+    "agents",
+    "subagents",
+    "mcp",
+    "model-context-protocol",
+    "cli",
+    "git-worktree",
+    "ai",
+    "automation"
+  ],
   "license": "Apache-2.0",
   "author": "Kanwar Singh <hello@knwar.com> (https://knwar.com)",
   "homepage": "https://github.com/Knwar/kankanban#readme",
   "repository": { "type": "git", "url": "git+https://github.com/Knwar/kankanban.git" },
   "bugs": { "url": "https://github.com/Knwar/kankanban/issues" },
+  "engines": { "node": ">=20" },
   "type": "module",
   "bin": { "kankan": "bin/kankan.js" },
   "files": [
