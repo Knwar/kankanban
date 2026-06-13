@@ -1,0 +1,40 @@
+{
+  "name": "kankanban",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "author": "Kanwar Singh <hello@knwar.com> (https://knwar.com)",
+  "homepage": "https://github.com/Knwar/kankanban#readme",
+  "repository": { "type": "git", "url": "git+https://github.com/Knwar/kankanban.git" },
+  "bugs": { "url": "https://github.com/Knwar/kankanban/issues" },
+  "type": "module",
+  "bin": { "kankan": "bin/kankan.js" },
+  "files": [
+    "bin",
+    "dist",
+    "src",
+    "scripts",
+    ".claude",
+    "CLAUDE.md",
+    "!.claude/settings.local.json",
+    "!**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
+    "tsx": "^4.22.4",
+    "ws": "^8.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.9.3",
+    "@types/ws": "^8.18.1",
+    "typescript": "^6.0.3"
+  }
+}

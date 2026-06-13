@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>knwr board</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <div class="head-left">
+      <span id="project-name">—</span>
+      <button id="branch-chip" class="hidden" title="Changes / commit">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
+        <span id="branch-name"></span>
+      </button>
+      <span id="conn" class="conn offline">offline</span>
+    </div>
+    <div class="head-center" id="claude-usage" title="Claude subscription usage limits">
+      <span class="spark">✳</span>
+      <span class="cu-label">Limits</span>
+      <span class="usage" id="usage-5h"><label>5h</label><span class="ubar"><span class="ufill"></span></span><span class="upct">—</span></span>
+      <span class="usage" id="usage-wk"><label>week</label><span class="ubar"><span class="ufill"></span></span><span class="upct">—</span></span>
+    </div>
+    <div class="head-right">
+      <span id="stats"></span>
+      <span id="timer">0:00:00</span>
+    </div>
+  </header>
+  <main id="board"></main>
+  <footer>
+    <span id="agent-status" class="idle">● idle</span>
+    <div id="headline"></div>
+    <button id="teams-btn">0 teams active</button>
+  </footer>
+  <div id="teams-peek" class="hidden"></div>
+
+  <div id="git-modal" class="hidden">
+    <div class="git-dialog">
+      <div class="git-head">
+        <span id="git-title">changes</span>
+        <button id="git-close">✕</button>
+      </div>
+      <div class="git-body">
+        <ul id="git-files"></ul>
+        <div id="git-diff"></div>
+      </div>
+      <div class="git-commit">
+        <input id="commit-msg" placeholder="Commit message" maxlength="120" />
+        <textarea id="commit-desc" placeholder="Description (optional)" rows="2"></textarea>
+        <div class="git-actions">
+          <span id="git-result"></span>
+          <button id="commit-btn">Commit and push</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="card-modal" class="hidden">
+    <div class="card-dialog">
+      <div class="git-head">
+        <span id="card-title"></span>
+        <button id="card-close">✕</button>
+      </div>
+      <div class="card-detail">
+        <div id="card-meta"></div>
+        <h4>Description</h4>
+        <div id="card-desc"></div>
+        <h4>Acceptance criteria <span id="card-progress"></span></h4>
+        <div id="card-progressbar" class="cd-progress"><span id="card-progressfill"></span></div>
+        <ul id="card-subs"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

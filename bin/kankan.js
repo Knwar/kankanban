@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+// kankan CLI
+//   kankan init [dir] [name]   set up a project (auto-starts the daemon)
+//   kankan update [dir]        re-sync kit files into a set-up project (overwrites kit-owned files)
+//   kankan info                project details for this folder
+//   kankan start               start daemon + show project details (set-up folders only)
+//   kankan stop                stop the daemon (set-up folders only)
+//   kankan restart             restart + show project details (set-up folders only)
+//   kankan worktree add|remove|merge <id> [--force]   per-card git worktree, run in the project
+//   kankan daemon start|stop|restart|status|run   machine-level daemon management
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DAEMON_URL = process.env.DAEMON_URL ?? 'http://localhost:7890';
+const PORT = new URL(DAEMON_URL).port || '7890';
+const DATA_DIR = join(homedir(), '.kankan');
+const PID_FILE = join(DATA_DIR, 'daemon.pid');
+const LOG_FILE = join(DATA_DIR, 'daemon.log');
+
+const daemonEnv = () => ({
+  ...process.env,
+  PORT,
+  DB_PATH: process.env.DB_PATH ?? join(DATA_DIR, 'board.db'),
+});
+const daemonCmd = () => [join(ROOT, 'node_modules', '.bin', 'tsx'), join(ROOT, 'src', 'daemon', 'server.ts')];
+
+async function up() {
+  try {
+    return (await fetch(DAEMON_URL, { signal: AbortSignal.timeout(700) })).ok;
+  } catch {
+    return false;
+  }
+}
+
+async function start() {
+  if (await up()) {
+    console.log(`daemon already running at ${DAEMON_URL}`);
+    return true;
+  }
+  mkdirSync(DATA_DIR, { recursive: true });
+  const log = openSync(LOG_FILE, 'a');
+  const [bin, entry] = daemonCmd();
+  const child = spawn(bin, [entry], {
+    cwd: ROOT,
+    env: daemonEnv(),
+    detached: true,
+    stdio: ['ignore', log, log],
+  });
+  child.unref();
+  writeFileSync(PID_FILE, String(child.pid));
+  for (let i = 0; i < 20; i++) {
+    if (await up()) {
+      console.log(`daemon started at ${DAEMON_URL} (db: ${daemonEnv().DB_PATH})`);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  console.error(`daemon failed to start — see ${LOG_FILE}`);
+  return false;
+}
+
+function pidsOnPort() {
+  try {
+    return execFileSync('lsof', ['-ti', `:${PORT}`]).toString().trim().split('\n').filter(Boolean);
+  } catch {
+    return []; // nothing listening
+  }
+}
+
+async function stop() {
+  const pids = new Set(pidsOnPort());
+  if (existsSync(PID_FILE)) {
+    pids.add(readFileSync(PID_FILE, 'utf8').trim());
+    rmSync(PID_FILE, { force: true });
+  }
+  let stopped = false;
+  for (const pid of pids) {
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+      stopped = true;
+    } catch {
+      /* already gone */
+    }
+  }
+  console.log(stopped ? 'daemon stopped' : 'daemon was not running');
+  return stopped;
+}
+
+/** A folder counts as set up when its .mcp.json wires the kankan server. */
+function isSetup(dir) {
+  try {
+    return Boolean(JSON.parse(readFileSync(join(dir, '.mcp.json'), 'utf8')).mcpServers?.kankan);
+  } catch {
+    return false;
+  }
+}
+
+async function fetchJson(path) {
+  try {
+    const res = await fetch(`${DAEMON_URL}${path}`, { signal: AbortSignal.timeout(1500) });
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function info(dir) {
+  console.log(`root:      ${dir}`);
+  if (!(await up())) {
+    console.log(`daemon:    down — start it with: kankan start`);
+    return;
+  }
+  const project = await fetchJson(`/project?root=${encodeURIComponent(dir)}`);
+  if (!project) {
+    console.log(`daemon:    up at ${DAEMON_URL}, but project lookup failed`);
+    return;
+  }
+  const board = (await fetchJson(`/board?project=${project.project_id}`)) ?? [];
+  const lanes = ['backlog', 'queued', 'in_progress', 'in_review', 'done'];
+  const counts = lanes.map((l) => `${l}:${board.filter((c) => c.lane === l).length}`).join('  ');
+  console.log(`project:   ${project.name} (${project.project_id})`);
+  console.log(`daemon:    up at ${DAEMON_URL}`);
+  console.log(`overlay:   ${DAEMON_URL}/?project=${project.project_id}`);
+  console.log(`board:     ${counts}`);
+  console.log(`data:      ${daemonEnv().DB_PATH}  log: ${LOG_FILE}`);
+}
+
+async function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+
+  if (['info', 'start', 'stop', 'restart'].includes(cmd)) {
+    const dir = process.cwd();
+    if (!isSetup(dir)) {
+      console.error(`this folder is not set up for kankan — run: kankan init`);
+      process.exit(1);
+    }
+    if (cmd === 'stop') {
+      await stop();
+      process.exit(0);
+    }
+    if (cmd === 'restart') {
+      await stop();
+      await new Promise((r) => setTimeout(r, 400));
+      if (!(await start())) process.exit(1);
+    }
+    if (cmd === 'start' && !(await up()) && !(await start())) process.exit(1);
+    await info(dir);
+    process.exit(0);
+  }
+
+  if (cmd === 'init') {
+    const target = resolve(rest[0] ?? process.cwd());
+    if (!(await up()) && !(await start())) process.exit(1);
+    const args = [join(ROOT, 'scripts', 'init-project.sh'), target];
+    if (rest[1]) args.push(rest[1]);
+    const res = spawnSync('sh', args, { stdio: 'inherit', env: { ...process.env, DAEMON_URL } });
+    process.exit(res.status ?? 0);
+  }
+
+  if (cmd === 'update') {
+    const target = resolve(rest[0] ?? process.cwd());
+    if (!isSetup(target)) {
+      console.error(`this folder is not set up for kankan — run: kankan init`);
+      process.exit(1);
+    }
+    const res = spawnSync('sh', [join(ROOT, 'scripts', 'init-project.sh'), target], {
+      stdio: 'inherit',
+      env: { ...process.env, DAEMON_URL, KANKAN_UPDATE: '1' },
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  // Per-card git worktree, run against the project in the current directory.
+  // The script lives centrally (one source of truth); we just invoke it in cwd.
+  if (cmd === 'worktree') {
+    const res = spawnSync(process.execPath, [join(ROOT, 'scripts', 'worktree.js'), ...rest], {
+      cwd: process.cwd(),
+      stdio: 'inherit',
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  if (cmd === 'daemon') {
+    const sub = rest[0] ?? 'status';
+    if (sub === 'start') process.exit((await start()) ? 0 : 1);
+    if (sub === 'stop') {
+      await stop();
+      process.exit(0);
+    }
+    if (sub === 'restart') {
+      await stop();
+      await new Promise((r) => setTimeout(r, 400)); // let the port free up
+      process.exit((await start()) ? 0 : 1);
+    }
+    if (sub === 'status') {
+      console.log((await up()) ? `daemon up at ${DAEMON_URL}` : 'daemon down');
+      process.exit(0);
+    }
+    if (sub === 'run') {
+      const [bin, entry] = daemonCmd();
+      const res = spawnSync(bin, [entry], { cwd: ROOT, stdio: 'inherit', env: daemonEnv() });
+      process.exit(res.status ?? 0);
+    }
+  }
+
+  console.log(`usage:
+  kankan init [dir] [name]                 set up a project (auto-starts daemon)
+  kankan update [dir]                      re-sync kit files into a set-up project
+  kankan info                              project details for this folder
+  kankan start|stop|restart                daemon + project details (set-up folders)
+  kankan worktree add|remove|merge <id>    per-card git worktree, run in the project
+  kankan daemon start|stop|restart|status  machine-level daemon management
+  kankan daemon run                        run daemon in the foreground`);
+}
+
+await main();
