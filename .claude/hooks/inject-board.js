@@ -3,8 +3,8 @@ import { api, readStdin } from './lib.js';
 
 const data = await readStdin();
 const cwd = data.cwd ?? process.cwd();
-const project = await api('GET', `/project?root=${encodeURIComponent(cwd)}`);
-if (!project) process.exit(0); // daemon down — stay silent
+const project = await api('GET', `/project?root=${encodeURIComponent(cwd)}&create=0`);
+if (!project?.project_id) process.exit(0); // daemon down or no project here — stay silent
 
 const board = (await api('GET', `/board?project=${project.project_id}`)) ?? [];
 const lanes = ['backlog', 'queued', 'in_progress', 'in_review', 'done'];

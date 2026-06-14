@@ -1,13 +1,13 @@
 // PostToolUse (matcher: Edit|Write|Bash): worktree activity → ticker event.
-import { api, cardIdFrom, projectIdFor, readStdin } from './lib.js';
+import { api, cardIdFrom, contextFor, readStdin } from './lib.js';
 
 const data = await readStdin();
 const input = data.tool_input ?? {};
-const cardId = cardIdFrom(JSON.stringify(input));
+const ctx = await contextFor(data.cwd ?? process.cwd());
+const cardId = ctx.cardId ?? cardIdFrom(JSON.stringify(input));
 if (!cardId) process.exit(0); // not card work — ignore
-
-const projectId = await projectIdFor(data.cwd ?? process.cwd());
-if (!projectId) process.exit(0);
+if (!ctx.projectId) process.exit(0);
+const projectId = ctx.projectId;
 
 // ticker-friendly: path relative to the worktree, or the bash command
 const raw = String(input.file_path ?? input.command ?? '');

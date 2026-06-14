@@ -81,6 +81,13 @@ export function getOrCreateProject(db: DB, rootPath: string, name?: string): Pro
   return project;
 }
 
+/** Read-only lookup by root path — never creates (for hooks/transient cwds). */
+export function findProject(db: DB, rootPath: string): Project | undefined {
+  return db.prepare('SELECT * FROM projects WHERE root_path = ?').get(rootPath) as
+    | Project
+    | undefined;
+}
+
 export function createTask(
   db: DB,
   projectId: string,

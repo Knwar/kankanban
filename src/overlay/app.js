@@ -72,13 +72,56 @@ function setConn(online) {
   document.body.classList.toggle('offline', !online);
 }
 
+// ── project switcher ────────────────────────────────────────────────
+const projectBtn = document.getElementById('project-btn');
+const projectMenu = document.getElementById('project-menu');
+
+function setProject(project) {
+  document.getElementById('project-name').textContent = project?.name ?? 'no project yet';
+  document.title = project?.name ? `${project.name} - KanKanBan` : 'KanKanBan';
+}
+
+// Turn the name into a dropdown only when more than one project lives on this daemon.
+async function loadProjects() {
+  let list = [];
+  try {
+    list = await (await fetch('/projects')).json();
+  } catch {
+    /* daemon hiccup — leave the switcher as plain text */
+  }
+  if (list.length > 1) {
+    projectBtn.classList.add('multi');
+    projectMenu.innerHTML = list
+      .map((p) => `<div class="pm-item${p.id === projectId ? ' current' : ''}" data-id="${esc(p.id)}">${esc(p.name)}</div>`)
+      .join('');
+  } else {
+    projectBtn.classList.remove('multi');
+    projectMenu.classList.add('hidden');
+  }
+}
+
+projectBtn.onclick = (e) => {
+  if (!projectBtn.classList.contains('multi')) return;
+  e.stopPropagation();
+  projectMenu.classList.toggle('hidden');
+};
+projectMenu.onclick = (e) => {
+  const item = e.target.closest('.pm-item');
+  if (item) location.search = `?project=${item.dataset.id}`;
+};
+document.addEventListener('click', (e) => {
+  const sw = document.getElementById('project-switcher');
+  if (!projectMenu.classList.contains('hidden') && !sw.contains(e.target)) projectMenu.classList.add('hidden');
+});
+
 // ── state ───────────────────────────────────────────────────────────
 function applyEvent(msg) {
   if (msg.type === 'init') {
     cards.clear();
     for (const card of msg.board) cards.set(card.id, card);
-    document.getElementById('project-name').textContent = msg.project?.name ?? 'no project yet';
+    setProject(msg.project);
     projectId = msg.project?.id ?? null;
+    loadProjects();
     refreshBranch();
     seedHeadline(msg.events);
     startedAt = msg.stats?.started_at ?? Date.now();
@@ -413,8 +456,15 @@ async function refreshCardModal() {
   document.getElementById('card-progress').textContent = total ? `${done} of ${total}` : '';
   document.getElementById('card-progressbar').style.display = total ? '' : 'none';
   document.getElementById('card-progressfill').style.width = `${pct}%`;
+  // while a builder is on the card, flag the first unchecked criterion as "working"
+  const activeIdx = task.lane === 'in_progress' ? subs.findIndex((s) => !s.done) : -1;
   document.getElementById('card-subs').innerHTML = total
-    ? subs.map((s) => `<li class="${s.done ? 'done' : ''}"><span class="ck">${s.done ? '✓' : ''}</span><span class="txt">${esc(s.text)}</span></li>`).join('')
+    ? subs
+        .map(
+          (s, i) =>
+            `<li class="${s.done ? 'done' : ''}${i === activeIdx ? ' active' : ''}"><span class="ck">${s.done ? '✓' : ''}</span><span class="txt">${esc(s.text)}</span>${i === activeIdx ? '<span class="sub-now">working</span>' : ''}</li>`,
+        )
+        .join('')
     : '<li class="empty">No acceptance criteria yet</li>';
 }
 

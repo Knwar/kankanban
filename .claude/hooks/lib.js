@@ -29,8 +29,23 @@ export async function api(method, path, body) {
 }
 
 export async function projectIdFor(cwd) {
-  const project = await api('GET', `/project?root=${encodeURIComponent(cwd)}`);
+  // create=0: hooks must never create a project — only the orchestrator / `kankan init` do.
+  const project = await api('GET', `/project?root=${encodeURIComponent(cwd)}&create=0`);
   return project?.project_id ?? null;
+}
+
+/**
+ * Resolve { projectId, cardId } for a cwd, mapping a kankan worktree back to
+ * its parent project. Inside .../.trees/<id>/... the project is the parent
+ * repo and the card is <id>; otherwise the project owns the cwd directly.
+ * Never creates a project — so builder activity surfaces on the real board.
+ */
+export async function contextFor(cwd) {
+  const m = String(cwd ?? '').match(/^(.*?)\/\.trees\/([^/]+)/);
+  const root = m ? m[1] : String(cwd ?? '');
+  const cardId = m ? m[2] : null;
+  const project = await api('GET', `/project?root=${encodeURIComponent(root)}&create=0`);
+  return { projectId: project?.project_id ?? null, cardId };
 }
 
 /** Worktree path is the agent↔card correlation key: .trees/<id> → <id>. */
