@@ -1,10 +1,10 @@
 // Live agent status for the stream overlay. Ephemeral: POST /status is
 // broadcast-only, never stored. Registered on PreToolUse (all tools),
 // UserPromptSubmit, Stop, SubagentStart and SubagentStop.
-import { api, cardIdFrom, projectIdFor, readStdin } from './lib.js';
+import { api, cardIdFrom, contextFor, readStdin } from './lib.js';
 
 const data = await readStdin();
-const projectId = await projectIdFor(data.cwd ?? process.cwd());
+const { projectId, cardId } = await contextFor(data.cwd ?? process.cwd());
 if (!projectId) process.exit(0);
 
 const agent = data.agent_type ?? 'orchestrator';
@@ -57,5 +57,5 @@ await api('POST', '/status', {
   agent,
   verb,
   detail,
-  task_id: cardIdFrom(JSON.stringify(data.tool_input ?? data)),
+  task_id: cardId ?? cardIdFrom(JSON.stringify(data.tool_input ?? data)),
 });

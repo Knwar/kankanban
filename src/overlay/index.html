@@ -2,13 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>knwr board</title>
+  <title>KanKanBan</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header>
     <div class="head-left">
-      <span id="project-name">—</span>
+      <div id="project-switcher">
+        <button id="project-btn" title="Switch project">
+          <span id="project-name">—</span>
+          <svg id="project-caret" viewBox="0 0 16 16" width="11" height="11" fill="currentColor"><path d="M4.22 6.22a.75.75 0 0 1 1.06 0L8 8.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 7.28a.75.75 0 0 1 0-1.06Z"/></svg>
+        </button>
+        <div id="project-menu" class="hidden"></div>
+      </div>
       <button id="branch-chip" class="hidden" title="Changes / commit">
         <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
         <span id="branch-name"></span>

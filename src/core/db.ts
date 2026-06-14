@@ -19,7 +19,7 @@ export function openDb(path = ':memory:'): DB {
 }
 
 /** Additive migrations for DBs created before a column existed. */
-function migrate(db: DB): void {
+export function migrate(db: DB): void {
   const cols = (db.pragma('table_info(tasks)') as { name: string }[]).map((c) => c.name);
   if (!cols.includes('subtasks')) db.exec('ALTER TABLE tasks ADD COLUMN subtasks TEXT');
 }

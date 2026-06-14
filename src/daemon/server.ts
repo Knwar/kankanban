@@ -157,8 +157,27 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (method === 'GET' && pathname === '/project') {
     const root = url.searchParams.get('root');
     if (!root) return json(res, 400, { error: 'root required' });
+    // create=0 → look up only (hooks use this so transient cwds, e.g. worktrees,
+    // never spawn junk projects). Default creates, for `kankan init` / the MCP tool.
+    if (url.searchParams.get('create') === '0') {
+      const found = board.findProject(db, root);
+      return json(res, 200, found ? { project_id: found.id, name: found.name } : { project_id: null });
+    }
     const project = board.getOrCreateProject(db, root, url.searchParams.get('name') ?? undefined);
     return json(res, 200, { project_id: project.id, name: project.name });
+  }
+
+  if (method === 'GET' && pathname === '/projects') {
+    // boards with at least one card — powers the overlay's project switcher.
+    // (Empty projects, e.g. ones a stray cwd created, are hidden.)
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.name FROM projects p
+         WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.project_id = p.id)
+         ORDER BY p.created_at DESC`,
+      )
+      .all() as { id: string; name: string }[];
+    return json(res, 200, rows);
   }
 
   if (method === 'GET' && ['/board', '/active', '/next'].includes(pathname)) {
