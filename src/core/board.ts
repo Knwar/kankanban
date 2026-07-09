@@ -134,6 +134,8 @@ export function createTask(
     branch: null,
     depends_on: opts.depends_on ? JSON.stringify(opts.depends_on) : null,
     subtasks: null,
+    blocked_at: null,
+    blocked_reason: null,
     review_rounds: 0,
     position: (max.max ?? 0) + 1,
     created_at: ts,
@@ -201,7 +203,9 @@ export function moveTask(db: DB, taskId: string, lane: string, agent?: string): 
   assertLane(lane);
   const task = getTask(db, taskId);
   if (task.lane !== lane) {
-    db.prepare('UPDATE tasks SET lane = ?, updated_at = ? WHERE id = ?').run(lane, now(), taskId);
+    // reaching the terminal lane clears any open blocker
+    const clearBlock = lane === 'done' ? ', blocked_at = NULL, blocked_reason = NULL' : '';
+    db.prepare(`UPDATE tasks SET lane = ?, updated_at = ?${clearBlock} WHERE id = ?`).run(lane, now(), taskId);
     appendEvent(db, {
       project_id: task.project_id,
       task_id: taskId,
@@ -210,6 +214,40 @@ export function moveTask(db: DB, taskId: string, lane: string, agent?: string): 
       agent,
     });
   }
+  return getTask(db, taskId);
+}
+
+/**
+ * A builder flags that this card needs a human decision it can't make itself —
+ * an ambiguous or contradictory spec, a destructive/irreversible action to
+ * confirm, a missing secret, an architectural fork the requirements don't
+ * resolve. It's a flag in place (the lane doesn't change): the card surfaces as
+ * a top-priority Attention item until the human resolves it.
+ */
+export function raiseBlocker(db: DB, taskId: string, reason: string, agent?: string): Task {
+  const task = getTask(db, taskId);
+  const ts = now();
+  db.prepare('UPDATE tasks SET blocked_at = ?, blocked_reason = ?, updated_at = ? WHERE id = ?').run(ts, reason, ts, taskId);
+  appendEvent(db, {
+    project_id: task.project_id,
+    task_id: taskId,
+    type: 'block',
+    payload: { reason },
+    agent: agent ?? task.assigned_agent,
+  });
+  return getTask(db, taskId);
+}
+
+/** Clear a card's blocker once the human has answered — work can resume. */
+export function resolveBlocker(db: DB, taskId: string, note?: string): Task {
+  const task = getTask(db, taskId);
+  db.prepare('UPDATE tasks SET blocked_at = NULL, blocked_reason = NULL, updated_at = ? WHERE id = ?').run(now(), taskId);
+  appendEvent(db, {
+    project_id: task.project_id,
+    task_id: taskId,
+    type: 'unblock',
+    payload: { note: note ?? null },
+  });
   return getTask(db, taskId);
 }
 
@@ -251,7 +289,8 @@ export function redirectTask(
   const task = getTask(db, taskId);
   db.prepare(
     `UPDATE tasks SET lane = 'backlog', assigned_agent = NULL, worktree_path = NULL, branch = NULL,
-     review_rounds = 0, subtasks = NULL, requirements = COALESCE(?, requirements), updated_at = ? WHERE id = ?`,
+     review_rounds = 0, subtasks = NULL, blocked_at = NULL, blocked_reason = NULL,
+     requirements = COALESCE(?, requirements), updated_at = ? WHERE id = ?`,
   ).run(opts.requirements ?? null, now(), taskId);
   appendEvent(db, {
     project_id: task.project_id,
@@ -281,7 +320,8 @@ export function assignCard(
   // wins, else the matching team member's, so the builder knows which to load.
   const resolvedSkill = skill ?? teamMemberByLabel(db, agent)?.skill ?? null;
   updateTask(db, taskId, { assigned_agent: agent, worktree_path: worktreePath, branch });
-  db.prepare('UPDATE tasks SET skill = ?, updated_at = ? WHERE id = ?').run(resolvedSkill, now(), taskId);
+  // re-dispatching a builder means the human has acted on any blocker → clear it
+  db.prepare('UPDATE tasks SET skill = ?, blocked_at = NULL, blocked_reason = NULL, updated_at = ? WHERE id = ?').run(resolvedSkill, now(), taskId);
   const task = getTask(db, taskId);
   appendEvent(db, {
     project_id: task.project_id,
@@ -498,18 +538,20 @@ export function checkSubtask(
 }
 
 const CARD_COLUMNS =
-  'id, title, lane, tag, skill, assigned_agent AS agent, review_rounds AS rounds, updated_at, phase_id, subtasks';
+  'id, title, lane, tag, skill, assigned_agent AS agent, review_rounds AS rounds, updated_at, phase_id, blocked_at, blocked_reason, subtasks';
 
-function toSummary(row: CardSummary & { subtasks: string | null }): CardSummary {
-  const { subtasks, ...card } = row;
-  return { ...card, subs: progressOf(subtasks) };
+type CardRow = Omit<CardSummary, 'subs' | 'blocked'> & { subtasks: string | null; blocked_at: number | null };
+
+function toSummary(row: CardRow): CardSummary {
+  const { subtasks, blocked_at, ...card } = row;
+  return { ...card, blocked: !!blocked_at, subs: progressOf(subtasks) };
 }
 
 export function getBoard(db: DB, projectId: string): CardSummary[] {
   return (
     db
       .prepare(`SELECT ${CARD_COLUMNS} FROM tasks WHERE project_id = ? ORDER BY lane, position`)
-      .all(projectId) as (CardSummary & { subtasks: string | null })[]
+      .all(projectId) as CardRow[]
   ).map(toSummary);
 }
 
@@ -519,7 +561,7 @@ export function getActiveCards(db: DB, projectId: string): CardSummary[] {
       .prepare(
         `SELECT ${CARD_COLUMNS} FROM tasks WHERE project_id = ? AND lane = 'in_progress' ORDER BY position`,
       )
-      .all(projectId) as (CardSummary & { subtasks: string | null })[]
+      .all(projectId) as CardRow[]
   ).map(toSummary);
 }
 
@@ -672,12 +714,12 @@ export function getAttention(db: DB, projectId: string): AttentionItem[] {
   const nowTs = now();
   const tasks = db
     .prepare(
-      `SELECT id, title, lane, requirements, subtasks, depends_on, assigned_agent, phase_id, created_at
+      `SELECT id, title, lane, requirements, subtasks, depends_on, assigned_agent, phase_id, created_at, blocked_at, blocked_reason
        FROM tasks WHERE project_id = ? AND lane != 'done'`,
     )
     .all(projectId) as Pick<
     Task,
-    'id' | 'title' | 'lane' | 'requirements' | 'subtasks' | 'depends_on' | 'assigned_agent' | 'phase_id' | 'created_at'
+    'id' | 'title' | 'lane' | 'requirements' | 'subtasks' | 'depends_on' | 'assigned_agent' | 'phase_id' | 'created_at' | 'blocked_at' | 'blocked_reason'
   >[];
 
   // impact: how many open cards depend on each card
@@ -709,6 +751,17 @@ export function getAttention(db: DB, projectId: string): AttentionItem[] {
     const fails = (failCount.get(t.id) as { c: number }).c;
     const latest = latestReview.get(t.id) as { verdict: string; created_at: number } | undefined;
 
+    // a builder-raised blocker outranks every derived signal — we know exactly why it's stuck
+    if (t.blocked_at) {
+      items.push({
+        ...base,
+        kind: 'blocked',
+        severity: 'blocker',
+        reason: t.blocked_reason ?? 'Blocked — needs your decision',
+        since: t.blocked_at,
+      });
+      continue;
+    }
     if (fails >= 2) {
       items.push({
         ...base,
@@ -768,8 +821,15 @@ export function getAttention(db: DB, projectId: string): AttentionItem[] {
     }
   }
 
+  // a builder-raised blocker is an explicit "I need you" — it outranks other
+  // same-severity (derived) signals, then most-depended-on, then oldest.
+  const blockedFirst = (i: AttentionItem) => (i.kind === 'blocked' ? 0 : 1);
   items.sort(
-    (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.blocking - a.blocking || a.since - b.since,
+    (a, b) =>
+      SEV_RANK[a.severity] - SEV_RANK[b.severity] ||
+      blockedFirst(a) - blockedFirst(b) ||
+      b.blocking - a.blocking ||
+      a.since - b.since,
   );
   return items;
 }

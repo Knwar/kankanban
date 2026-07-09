@@ -24,4 +24,6 @@ export function migrate(db: DB): void {
   if (!cols.includes('subtasks')) db.exec('ALTER TABLE tasks ADD COLUMN subtasks TEXT');
   if (!cols.includes('phase_id')) db.exec('ALTER TABLE tasks ADD COLUMN phase_id TEXT');
   if (!cols.includes('skill')) db.exec('ALTER TABLE tasks ADD COLUMN skill TEXT');
+  if (!cols.includes('blocked_at')) db.exec('ALTER TABLE tasks ADD COLUMN blocked_at INTEGER');
+  if (!cols.includes('blocked_reason')) db.exec('ALTER TABLE tasks ADD COLUMN blocked_reason TEXT');
 }

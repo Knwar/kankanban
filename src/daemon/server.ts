@@ -113,6 +113,8 @@ function toCard(task: Task) {
     rounds: task.review_rounds,
     updated_at: task.updated_at,
     phase_id: task.phase_id,
+    blocked: !!task.blocked_at,
+    blocked_reason: task.blocked_reason,
     subs: board.progressOf(task.subtasks),
   };
 }
@@ -558,7 +560,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return json(res, 200, phase);
   }
 
-  const taskMatch = pathname.match(/^\/task\/([^/]+)(?:\/(move|review|check|redirect|activity))?$/);
+  const taskMatch = pathname.match(/^\/task\/([^/]+)(?:\/(move|review|check|redirect|activity|block|unblock))?$/);
   if (taskMatch) {
     const [, taskId, action] = taskMatch;
     if (method === 'GET' && !action) {
@@ -617,6 +619,17 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const task = board.redirectTask(db, taskId, { requirements: b.requirements, note: b.note });
       announce(task);
       return json(res, 200, { task_id: task.id, lane: task.lane });
+    }
+    if (method === 'POST' && action === 'block') {
+      if (!b.reason) return json(res, 400, { error: 'reason required' });
+      const task = board.raiseBlocker(db, taskId, b.reason, b.agent);
+      announce(task);
+      return json(res, 200, { task_id: task.id, blocked: true });
+    }
+    if (method === 'POST' && action === 'unblock') {
+      const task = board.resolveBlocker(db, taskId, b.note);
+      announce(task);
+      return json(res, 200, { task_id: task.id, blocked: false });
     }
     if (method === 'POST' && action === 'activity') {
       // tokens come from the build hook; the daemon adds line-churn + elapsed time.

@@ -24,9 +24,11 @@ import {
   getStats,
   listTeam,
   moveTask,
+  raiseBlocker,
   recordActivity,
   recordReview,
   redirectTask,
+  resolveBlocker,
   setSubtasks,
   updateTask,
   updateTeamMember,
@@ -271,7 +273,7 @@ describe('board reads', () => {
     const { db, project } = setup();
     createTask(db, project.id, 'First', { requirements: 'long spec text' });
     const [card] = getBoard(db, project.id);
-    assert.deepEqual(Object.keys(card).sort(), ['agent', 'id', 'lane', 'phase_id', 'rounds', 'skill', 'subs', 'tag', 'title', 'updated_at']);
+    assert.deepEqual(Object.keys(card).sort(), ['agent', 'blocked', 'blocked_reason', 'id', 'lane', 'phase_id', 'rounds', 'skill', 'subs', 'tag', 'title', 'updated_at']);
   });
 
   it('active cards are the in_progress lane', () => {
@@ -513,6 +515,78 @@ describe('delete + redirect', () => {
     const r = redirectTask(db, t.id);
     assert.equal(r.requirements, 'original');
     assert.equal(r.lane, 'backlog');
+  });
+});
+
+describe('blockers', () => {
+  it('raise_blocker flags the card in place (no lane change) and logs a block event', () => {
+    const { db, project } = setup();
+    const t = createTask(db, project.id, 'Ambiguous', { requirements: 'x' });
+    moveTask(db, t.id, 'in_progress');
+    const b = raiseBlocker(db, t.id, 'Which auth provider?', 'builder-1');
+    assert.equal(b.lane, 'in_progress'); // stays put — it's a flag, not a lane
+    assert.ok(b.blocked_at);
+    assert.equal(b.blocked_reason, 'Which auth provider?');
+    const ev = getRecentEvents(db, project.id)[0];
+    assert.equal(ev.type, 'block');
+    assert.equal(ev.agent, 'builder-1');
+    assert.equal(getBoard(db, project.id)[0].blocked, true);
+  });
+
+  it('surfaces a blocked card as the top-priority attention item, above derived signals', () => {
+    const { db, project } = setup();
+    const t = createTask(db, project.id, 'Stuck', { requirements: 'x' });
+    moveTask(db, t.id, 'in_progress');
+    db.prepare('UPDATE task_events SET created_at = created_at - ? WHERE task_id = ?').run(50 * 60_000, t.id); // also long-stalled
+    raiseBlocker(db, t.id, 'Confirm the destructive migration');
+    const [item] = getAttention(db, project.id);
+    assert.equal(item.kind, 'blocked'); // wins over 'stalled'
+    assert.equal(item.severity, 'blocker');
+    assert.equal(item.reason, 'Confirm the destructive migration');
+    assert.equal(item.card_id, t.id);
+  });
+
+  it('ranks a fresh blocker above an older same-severity stall on another card', () => {
+    const { db, project } = setup();
+    const stalled = createTask(db, project.id, 'Old stall', { requirements: 'x' });
+    moveTask(db, stalled.id, 'in_progress');
+    db.prepare('UPDATE task_events SET created_at = created_at - ? WHERE task_id = ?').run(50 * 60_000, stalled.id); // long-stalled = blocker
+    const blocked = createTask(db, project.id, 'Just blocked', { requirements: 'x' });
+    moveTask(db, blocked.id, 'in_progress');
+    raiseBlocker(db, blocked.id, 'decide this');
+    const items = getAttention(db, project.id);
+    assert.equal(items[0].card_id, blocked.id); // explicit blocker wins the tie
+    assert.equal(items[0].kind, 'blocked');
+    assert.equal(items[1].kind, 'stalled');
+  });
+
+  it('resolve_blocker clears the flag and logs an unblock event', () => {
+    const { db, project } = setup();
+    const t = createTask(db, project.id, 'Answered', { requirements: 'x' });
+    raiseBlocker(db, t.id, 'q?');
+    const r = resolveBlocker(db, t.id, 'use provider Y');
+    assert.equal(r.blocked_at, null);
+    assert.equal(r.blocked_reason, null);
+    assert.equal(getRecentEvents(db, project.id)[0].type, 'unblock');
+    assert.equal(getAttention(db, project.id).length, 0);
+  });
+
+  it('redirect, re-assign, and moving to done each clear a blocker', () => {
+    const { db, project } = setup();
+    // redirect clears
+    const a = createTask(db, project.id, 'A', { requirements: 'x' });
+    raiseBlocker(db, a.id, 'q');
+    assert.equal(redirectTask(db, a.id).blocked_at, null);
+    // re-assign clears
+    const b = createTask(db, project.id, 'B', { requirements: 'x' });
+    moveTask(db, b.id, 'in_progress');
+    raiseBlocker(db, b.id, 'q');
+    assert.equal(assignCard(db, b.id, 'builder-1', `.trees/${b.id}`, `card/${b.id}`).blocked_at, null);
+    // move → done clears
+    const c = createTask(db, project.id, 'C', { requirements: 'x' });
+    moveTask(db, c.id, 'in_progress');
+    raiseBlocker(db, c.id, 'q');
+    assert.equal(moveTask(db, c.id, 'done').blocked_at, null);
   });
 });
 

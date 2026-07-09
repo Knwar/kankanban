@@ -47,6 +47,8 @@ export interface Task {
   branch: string | null;
   depends_on: string | null; // JSON array of task ids
   subtasks: string | null; // JSON array of Subtask (acceptance criteria)
+  blocked_at: number | null; // epoch ms a builder raised a blocker, or null (not blocked)
+  blocked_reason: string | null; // the decision/question the blocker needs
   review_rounds: number;
   position: number;
   created_at: number;
@@ -69,6 +71,8 @@ export interface CardSummary {
   rounds: number;
   updated_at: number;
   phase_id: string | null;
+  blocked: boolean; // a builder raised a blocker on this card
+  blocked_reason: string | null; // the decision/question it needs
   subs: { done: number; total: number } | null;
 }
 
@@ -85,6 +89,8 @@ export type EventType =
   | 'check'
   | 'delete'
   | 'redirect'
+  | 'block'
+  | 'unblock'
   | 'phase_create'
   | 'phase_activate'
   | 'phase_done';
@@ -141,6 +147,7 @@ export interface ProjectStats {
 }
 
 export type AttentionKind =
+  | 'blocked'
   | 'review_failed'
   | 'merge_conflict'
   | 'stalled'

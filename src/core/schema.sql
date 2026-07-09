@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   branch         TEXT,                    -- card/<id>
   depends_on     TEXT,                    -- JSON array of task ids
   subtasks       TEXT,                    -- JSON array of {text,done} acceptance criteria
+  blocked_at     INTEGER,                 -- epoch ms a builder raised a blocker, or null (not blocked)
+  blocked_reason TEXT,                    -- the decision/question the blocker needs, or null
   review_rounds  INTEGER NOT NULL DEFAULT 0,
   position       INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,

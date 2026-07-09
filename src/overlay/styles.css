@@ -272,6 +272,10 @@ main {
 .card[data-tag="db"]    { border-left-color: #e5c07b; }
 .card[data-tag="infra"] { border-left-color: #56b6c2; }
 
+/* a builder-raised blocker: red edge + badge, so it can't be missed on the board */
+.card.blocked { border-left-color: #e06c75; background: linear-gradient(90deg, rgba(224, 108, 117, 0.14), var(--card-bg) 60%); }
+.card .meta .blocked-pill { color: #e06c75; border: 1px solid #e06c75; border-radius: 3px; padding: 0 4px; font-weight: 600; }
+
 .card .title { font-size: 13px; }
 
 .card .meta {
@@ -623,6 +627,18 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
   overflow: hidden;
 }
 
+.card-blocked {
+  margin: 12px 0 4px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(224, 108, 117, 0.12); border: 1px solid rgba(224, 108, 117, 0.45);
+}
+.card-blocked .cb-head { color: #e06c75; font-size: 13px; margin-bottom: 5px; }
+.card-blocked .cb-reason { font-size: 13px; color: var(--text); white-space: pre-wrap; }
+.card-blocked .cb-resolve {
+  margin-top: 9px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  background: #e06c75; color: #1a1013; border: none; border-radius: 6px; font-weight: 600;
+}
+.card-blocked .cb-resolve:hover { background: #eb7d86; }
+
 .card-detail { padding: 18px 20px 20px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.16) transparent; }
 .card-detail::-webkit-scrollbar { width: 8px; }
 .card-detail::-webkit-scrollbar-track { background: transparent; }
@@ -955,37 +971,28 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
 .att-arrow { flex: none; color: var(--dim); }
 .att-empty { padding: 48px 20px; text-align: center; color: var(--dim); line-height: 1.7; }
 
-/* ── office simulation (fun Attention mode) ── */
+/* ── office simulation (2D-game office) ── */
 #office { display: flex; padding: 0; overflow: hidden; }
-.office-floor {
-  flex: 1; position: relative; overflow: hidden;
-  background:
-    radial-gradient(circle at 28% 22%, rgba(93, 211, 168, 0.05), transparent 42%),
-    radial-gradient(circle at 75% 75%, rgba(97, 175, 239, 0.04), transparent 42%),
-    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 42px),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.018) 0 1px, transparent 1px 42px);
-}
-.zone { position: absolute; border: 1px dashed rgba(255, 255, 255, 0.1); border-radius: 14px; background: rgba(255, 255, 255, 0.012); }
-.zone-label { position: absolute; top: 9px; left: 13px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--dim); font-weight: 700; }
-.zone-desks   { top: 6%;  left: 3%;  width: 44%; height: 42%; }
-.zone-meeting { top: 6%;  right: 3%; width: 42%; height: 42%; border-color: rgba(229, 192, 123, 0.28); }
-.zone-think   { bottom: 6%; left: 3%; width: 40%; height: 42%; border-color: rgba(97, 175, 239, 0.24); }
-.zone-lounge  { bottom: 6%; left: 45%; width: 42%; height: 42%; }
+.office-stage { flex: 1; min-width: 0; overflow: auto; padding: 14px; }
+.office-floor { position: relative; width: 1400px; height: 880px; margin: auto; border-radius: 14px; overflow: hidden; box-shadow: inset 0 0 90px rgba(0, 0, 0, 0.5); }
+.floorplan { position: absolute; inset: 0; width: 1400px; height: 880px; display: block; }
+.fp-label { fill: rgba(40, 34, 22, 0.5); font-size: 16px; font-weight: 700; letter-spacing: 2.5px; font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+#office-agents { position: absolute; inset: 0; }
 
 .office-agent {
-  position: absolute; width: 64px; margin: -34px 0 0 -32px; text-align: center; z-index: 2;
-  transition: left 1.6s cubic-bezier(0.4, 0, 0.2, 1), top 1.6s cubic-bezier(0.4, 0, 0.2, 1);
+  position: absolute; top: 0; left: 0; width: 48px; text-align: center; z-index: 3;
+  transform-origin: 24px 46px; will-change: transform;
 }
-.oa-avatar {
-  width: 34px; height: 34px; border-radius: 50%; margin: 0 auto;
-  display: flex; align-items: center; justify-content: center;
-  color: #0b0d12; font-weight: 700; font-size: 14px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.45);
-  animation: bob 2.8s ease-in-out infinite;
-}
-.oa-label { font-size: 10px; color: var(--dim); margin-top: 4px; white-space: nowrap; }
-.oa-bubble { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 14px; opacity: 0; transition: opacity 0.3s; }
-.office-agent.working .oa-avatar { animation: bob 1.1s ease-in-out infinite; box-shadow: 0 0 0 3px rgba(93, 211, 168, 0.25), 0 3px 12px rgba(0, 0, 0, 0.45); }
-.office-agent.working .oa-bubble, .office-agent.meeting .oa-bubble { opacity: 1; animation: floaty 2.2s ease-in-out infinite; }
+.office-agent svg { display: block; margin: 0 auto; overflow: visible; animation: bob 2.8s ease-in-out infinite; }
+.office-agent.walking svg { animation-duration: 0.45s; } /* bouncy step while moving */
+.office-agent.working svg { animation: bob 1.1s ease-in-out infinite; }
+.oa-label { font-size: 10px; color: var(--text); opacity: 0.9; margin-top: -1px; white-space: nowrap; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85); }
+.oa-bubble { position: absolute; top: -13px; left: 50%; transform: translateX(-50%); font-size: 15px; opacity: 0; transition: opacity 0.3s; z-index: 4; }
+.office-agent.working .oa-bubble { opacity: 1; animation: floaty 2.2s ease-in-out infinite; } /* thinking bubble only while working at a desk */
+/* a blocked agent raises its hand (✋, set in JS) and pulses red for attention */
+.office-agent.blocked .oa-bubble { opacity: 1; animation: floaty 2.2s ease-in-out infinite; }
+.office-agent.blocked svg { animation: blockpulse 1.1s ease-in-out infinite; }
+@keyframes blockpulse { 0%, 100% { filter: drop-shadow(0 0 0 rgba(224, 108, 117, 0)); } 50% { filter: drop-shadow(0 0 7px rgba(224, 108, 117, 0.95)); } }
 @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @keyframes floaty { 0%, 100% { transform: translateX(-50%) translateY(0); } 50% { transform: translateX(-50%) translateY(-3px); } }
 .office-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--dim); font-size: 13px; line-height: 1.7; }

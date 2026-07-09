@@ -547,13 +547,105 @@ function renderAttention() {
 }
 
 // ── office simulation: agents mill about; attention items on the right ──
-const OFFICE_ZONES = {
-  desks: { x: 5, y: 12, w: 40, h: 30 },
-  meeting: { x: 55, y: 12, w: 38, h: 30 },
-  think: { x: 5, y: 58, w: 36, h: 30 },
-  lounge: { x: 47, y: 58, w: 38, h: 30 },
+// world layout in px (matches the SVG floorplan viewBox 1400×880)
+const WS_RECT = { x: 110, y: 388, w: 770, h: 184 }; // workspace desks (in the walkway band)
+const DOORS = { A: { x: 380, y: 372 }, B: { x: 1020, y: 372 }, L: { x: 700, y: 590 } };
+const MEET_SEATS = {
+  A: [{ x: 318, y: 140 }, { x: 438, y: 140 }, { x: 318, y: 278 }, { x: 438, y: 278 }, { x: 238, y: 206 }, { x: 518, y: 206 }],
+  B: [{ x: 958, y: 140 }, { x: 1078, y: 140 }, { x: 958, y: 278 }, { x: 1078, y: 278 }, { x: 878, y: 206 }, { x: 1158, y: 206 }],
 };
+const LOUNGE_SEATS = [{ x: 171, y: 756 }, { x: 275, y: 756 }, { x: 379, y: 756 }, { x: 1021, y: 756 }, { x: 1125, y: 756 }, { x: 1229, y: 756 }];
+const WANDER = { x: 920, y: 400, w: 400, h: 160 };
+let OFFICE_SCALE = 1;
+
+function packZone(n, r) {
+  if (n <= 0) return [];
+  const cols = Math.max(1, Math.round(Math.sqrt(n * (r.w / r.h))));
+  const rows = Math.ceil(n / cols);
+  const cw = r.w / cols;
+  const ch = r.h / rows;
+  const out = [];
+  for (let i = 0; i < n; i++) out.push({ x: r.x + cw * ((i % cols) + 0.5), y: r.y + ch * (Math.floor(i / cols) + 0.5) });
+  return out;
+}
+
+function deskSVG(x, y) {
+  return `<g transform="translate(${x.toFixed(0)},${y.toFixed(0)})"><rect x="-58" y="-64" width="116" height="54" rx="8" fill="#2b3242"/><rect x="-58" y="-64" width="116" height="9" rx="5" fill="#39425a"/><rect x="-24" y="-58" width="48" height="32" rx="4" fill="#0f1219"/><rect x="-19" y="-54" width="38" height="24" rx="2" fill="url(#screen)"/><rect x="-17" y="-22" width="34" height="9" rx="3" fill="#222836"/><rect x="-15" y="-4" width="30" height="26" rx="9" fill="#3a4356"/><rect x="-15" y="-8" width="30" height="8" rx="4" fill="#454f68"/></g>`;
+}
+
+// ── walking: a single rAF loop steps every agent along its waypoint path ──
+function pathTo(fromZone, toZone, x, y) {
+  const wps = [];
+  if (fromZone === 'A' || fromZone === 'B' || fromZone === 'L') wps.push(DOORS[fromZone]); // exit a room through its door
+  if (toZone === 'A' || toZone === 'B' || toZone === 'L') wps.push(DOORS[toZone]); // enter through the door
+  wps.push({ x, y });
+  return wps;
+}
+function setAgentXform(el) {
+  el.style.transform = `translate(${(el._px - 24).toFixed(1)}px, ${(el._py - 46).toFixed(1)}px) scale(${OFFICE_SCALE})`;
+}
+let officeRAF = null;
+let officeLastT = 0;
+function officeAnimate(t) {
+  const dt = officeLastT ? Math.min(0.05, (t - officeLastT) / 1000) : 0.016;
+  officeLastT = t;
+  const host = document.getElementById('office-agents');
+  const SPEED = 240; // px/sec
+  for (const el of host.children) {
+    if (!el.dataset.name || !el._path) continue;
+    const wp = el._path[el._pathI];
+    if (!wp) { el._path = null; el.classList.remove('walking'); continue; }
+    const dx = wp.x - el._px;
+    const dy = wp.y - el._py;
+    const d = Math.hypot(dx, dy);
+    const step = SPEED * dt;
+    if (d <= step) {
+      el._px = wp.x;
+      el._py = wp.y;
+      if (++el._pathI >= el._path.length) { el._path = null; el.classList.remove('walking'); }
+    } else {
+      el._px += (dx / d) * step;
+      el._py += (dy / d) * step;
+      el.classList.add('walking');
+    }
+    setAgentXform(el);
+  }
+  officeRAF = activeView === 'attention' && SETTINGS.office && host.children.length ? requestAnimationFrame(officeAnimate) : null;
+}
+function startOfficeAnim() {
+  if (!officeRAF) { officeLastT = 0; officeRAF = requestAnimationFrame(officeAnimate); }
+}
+
 const accentFor = (name) => ACCENTS[[...String(name)].reduce((a, c) => a + c.charCodeAt(0), 0) % ACCENTS.length];
+function officeCharSVG(color) {
+  return `<svg viewBox="0 0 40 50" width="40" height="50" aria-hidden="true"><ellipse cx="20" cy="46" rx="11" ry="3.4" fill="rgba(0,0,0,0.4)"/><rect x="10" y="23" width="20" height="20" rx="8" fill="${esc(color)}"/><rect x="10" y="23" width="20" height="7" rx="3.5" fill="rgba(255,255,255,0.14)"/><circle cx="20" cy="15" r="11" fill="#f2d6ba"/><path d="M9.4 13.5 a10.6 10.6 0 0 1 21.2 0 q-10.6 -7.5 -21.2 0 z" fill="#2e2820"/><circle cx="16" cy="15.5" r="1.5" fill="#2b2b2b"/><circle cx="24" cy="15.5" r="1.5" fill="#2b2b2b"/><path d="M17 19 q3 2 6 0" stroke="#cc9988" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
+}
+
+// the Claude teammate: clay body + a little antenna, so it reads as an AI worker
+function claudeCharSVG() {
+  return `<svg viewBox="0 0 40 50" width="40" height="50" aria-hidden="true"><ellipse cx="20" cy="46" rx="11" ry="3.4" fill="rgba(0,0,0,0.4)"/><line x1="20" y1="6" x2="20" y2="1.8" stroke="#b0532f" stroke-width="1.4"/><circle cx="20" cy="1.4" r="1.8" fill="#d97757"/><rect x="10" y="23" width="20" height="20" rx="8" fill="#d97757"/><rect x="10" y="23" width="20" height="7" rx="3.5" fill="rgba(255,255,255,0.18)"/><circle cx="20" cy="15" r="11" fill="#f2d6ba"/><path d="M9.4 13.5 a10.6 10.6 0 0 1 21.2 0 q-10.6 -7.5 -21.2 0 z" fill="#d97757"/><circle cx="16" cy="15.5" r="1.5" fill="#2b2b2b"/><circle cx="24" cy="15.5" r="1.5" fill="#2b2b2b"/><path d="M17 19 q3 2 6 0" stroke="#c15f3c" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>`;
+}
+
+// one Claude companion per room so a meeting is never a solo monologue
+const phantoms = {};
+function syncPhantom(room, seat) {
+  const host = document.getElementById('office-agents');
+  let el = phantoms[room];
+  if (el && !el.isConnected) el = phantoms[room] = null; // a roster rebuild dropped it
+  if (!seat) { if (el) el.style.display = 'none'; return; }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'office-agent office-phantom';
+    el.innerHTML = `${claudeCharSVG()}<div class="oa-label">Claude</div>`;
+    host.appendChild(el);
+    phantoms[room] = el;
+  }
+  el.style.display = '';
+  el._px = seat.x;
+  el._py = seat.y;
+  setAgentXform(el);
+}
+
 let officeTimer = null;
 let officeAgentKey = '';
 
@@ -567,18 +659,74 @@ function officeStateOf(name) {
   return meeting ? 'meeting' : 'idle';
 }
 
-function placeOfficeAgents() {
-  for (const el of document.getElementById('office-agents').children) {
-    if (!el.dataset.name) continue;
-    let st = officeStateOf(el.dataset.name);
-    if (st === 'idle' && Math.random() < 0.18) st = 'meeting'; // wander over to chat
+// an agent with a blocked card is stuck waiting on the human — raise its hand
+function officeBlockedOf(name) {
+  for (const c of cards.values()) if (c.agent === name && c.blocked) return true;
+  return false;
+}
+
+let lastDeskCount = -1;
+function layoutOffice() {
+  const kids = [...document.getElementById('office-agents').children].filter((el) => el.dataset.name);
+  // stable desk slot per agent — DOM order holds steady until the roster changes, so
+  // an agent always owns (and walks back to) the same workstation.
+  kids.forEach((el, i) => { el._slot = i; });
+  const working = [];
+  const review = [];
+  const idle = [];
+  for (const el of kids) {
+    const st = officeStateOf(el.dataset.name);
+    const blocked = officeBlockedOf(el.dataset.name);
     el.classList.toggle('working', st === 'working');
     el.classList.toggle('meeting', st === 'meeting');
-    const key = st === 'working' ? 'desks' : st === 'meeting' ? 'meeting' : Math.random() < 0.5 ? 'lounge' : 'think';
-    const z = OFFICE_ZONES[key];
-    el.style.left = `${z.x + Math.random() * z.w}%`;
-    el.style.top = `${z.y + Math.random() * z.h}%`;
+    el.classList.toggle('blocked', blocked);
+    const bubble = el.querySelector('.oa-bubble');
+    if (bubble) bubble.textContent = blocked ? '✋' : '💭';
+    (st === 'working' ? working : st === 'meeting' ? review : idle).push(el);
   }
+  OFFICE_SCALE = kids.length <= 8 ? 1 : kids.length <= 14 ? 0.85 : kids.length <= 22 ? 0.72 : 0.6;
+
+  // one PERMANENT desk per agent — count tracks the whole roster, not who's currently
+  // working, so workstations never appear/disappear as agents come and go.
+  const deskN = Math.min(Math.max(kids.length, 3), 15);
+  const deskPos = packZone(deskN, WS_RECT);
+  if (deskN !== lastDeskCount) {
+    lastDeskCount = deskN;
+    document.getElementById('fp-desks').innerHTML = deskPos.map((p) => deskSVG(p.x, p.y)).join('');
+  }
+
+  // send each agent to its spot: new ones appear instantly, the rest walk (path via doors)
+  const target = (el, zone, x, y) => {
+    if (el._px === undefined) { el._zone = zone; el._tx = x; el._ty = y; el._px = x; el._py = y; el._path = null; setAgentXform(el); return; }
+    if (el._zone === zone && Math.hypot((el._tx ?? x) - x, (el._ty ?? y) - y) < 10) return;
+    el._path = pathTo(el._zone, zone, x, y);
+    el._pathI = 0;
+    el._zone = zone;
+    el._tx = x;
+    el._ty = y;
+  };
+  // each worker returns to its own assigned desk (its stable slot)
+  working.forEach((el) => { const p = deskPos[Math.min(el._slot, deskPos.length - 1)]; target(el, 'work', p.x, p.y - 4); });
+
+  // meetings: group agents by room, then never leave anyone meeting alone
+  const roomAgents = { A: [], B: [] };
+  review.forEach((el, i) => { roomAgents[i % 2 === 0 ? 'A' : 'B'].push(el); });
+  for (const room of ['A', 'B']) {
+    const seats = MEET_SEATS[room];
+    roomAgents[room].forEach((el, j) => { const s = seats[j % seats.length]; target(el, room, s.x, s.y); });
+    // a lone agent gets a Claude companion across the table so it looks like a discussion
+    syncPhantom(room, roomAgents[room].length === 1 ? seats[3] : null);
+  }
+
+  let l = 0;
+  idle.forEach((el) => {
+    if (l < LOUNGE_SEATS.length) { target(el, 'L', LOUNGE_SEATS[l].x, LOUNGE_SEATS[l].y); l++; }
+    // wanderers: only pick a new spot once they've arrived, so we don't reset a walk mid-stride
+    else if (el._zone !== 'open' || (!el._path && Math.random() < 0.5)) {
+      target(el, 'open', WANDER.x + Math.random() * WANDER.w, WANDER.y + Math.random() * WANDER.h);
+    }
+  });
+  startOfficeAnim();
 }
 
 function renderOfficeAttn() {
@@ -619,17 +767,17 @@ async function renderOffice() {
           const el = document.createElement('div');
           el.className = 'office-agent';
           el.dataset.name = name;
-          el.innerHTML = `<div class="oa-bubble">💭</div><div class="oa-avatar" style="background:${esc(color)}">${esc((name[0] || '?').toUpperCase())}</div><div class="oa-label">${esc(name)}</div>`;
+          el.innerHTML = `<div class="oa-bubble">💭</div>${officeCharSVG(color)}<div class="oa-label">${esc(name)}</div>`;
           return el;
         }),
       );
-      placeOfficeAgents();
     }
   }
+  layoutOffice();
   renderOfficeAttn();
   if (!officeTimer) {
     officeTimer = setInterval(() => {
-      if (activeView === 'attention' && SETTINGS.office) placeOfficeAgents();
+      if (activeView === 'attention' && SETTINGS.office) layoutOffice();
     }, 3400);
   }
 }
@@ -706,7 +854,9 @@ function cardEl(card) {
   el.className = 'card';
   el.dataset.id = card.id;
   if (card.tag) el.dataset.tag = card.tag;
+  if (card.blocked) el.classList.add('blocked');
   const meta = [
+    card.blocked && `<span class="blocked-pill" title="${esc(card.blocked_reason ?? '')}">✋ blocked</span>`,
     card.tag && `<span class="tag">${esc(team(card.tag).name)}</span>`,
     card.agent && `<span class="agent">${esc(card.agent)}</span>`,
     card.skill && `<span class="skill">✦ ${esc(card.skill)}</span>`,
@@ -855,6 +1005,11 @@ async function refreshCardModal() {
     if (act.ms) meta.push(fmtDur(act.ms));
   }
   document.getElementById('card-meta').innerHTML = meta.map((m) => `<span>${esc(m)}</span>`).join('');
+  const blockedBox = document.getElementById('card-blocked');
+  blockedBox.classList.toggle('hidden', !task.blocked_at);
+  if (task.blocked_at) {
+    document.getElementById('card-blocked-reason').textContent = task.blocked_reason ?? 'Needs your decision';
+  }
   document.getElementById('card-desc').innerHTML = renderMarkdown(task.requirements);
   const subs = task.subtasks ?? [];
   const total = subs.length;
@@ -875,6 +1030,15 @@ async function refreshCardModal() {
     : '<li class="empty">No acceptance criteria yet</li>';
 }
 
+document.getElementById('card-unblock').onclick = async () => {
+  if (!openCardId) return;
+  await fetch(`/task/${openCardId}/unblock`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ note: 'resolved from overlay' }),
+  });
+  refreshCardModal();
+};
 document.getElementById('card-close').onclick = closeCardModal;
 document.getElementById('card-modal').onclick = (e) => {
   if (e.target === document.getElementById('card-modal')) closeCardModal();

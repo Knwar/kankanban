@@ -161,6 +161,26 @@ server.registerTool(
 );
 
 server.registerTool(
+  'raise_blocker',
+  {
+    description:
+      'Builder tool: flag that this card needs a human decision you cannot make yourself — an ambiguous or contradictory spec, a destructive/irreversible action to confirm, a missing secret/credential, or an architectural fork the requirements don’t resolve. Pass a specific question as `reason`, then stop and end your turn. The card stays where it is and jumps to the top of the human’s Attention queue until resolved. Not for ordinary uncertainty — that belongs in your final report.',
+    inputSchema: { task_id: z.string(), reason: z.string() },
+  },
+  ({ task_id, reason }) => api('POST', `/task/${task_id}/block`, { reason, agent: 'builder' }),
+);
+
+server.registerTool(
+  'resolve_blocker',
+  {
+    description:
+      'Clear a card’s blocker once you’ve answered the builder’s question — work can resume. redirect_task and re-dispatching a builder (assign_card) already clear it; use this when you’ve just folded the decision into the card’s requirements without redispatching yet.',
+    inputSchema: { task_id: z.string(), note: z.string().optional() },
+  },
+  ({ task_id, note }) => api('POST', `/task/${task_id}/unblock`, { note }),
+);
+
+server.registerTool(
   'record_review',
   {
     description: 'Record a review verdict for a card; bumps the review round.',

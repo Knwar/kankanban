@@ -44,9 +44,11 @@ Any card touching shared/central files (package manifests, routing, DI container
    - **pass** → `kankan worktree merge <id>` (merges `card/<id>` into main and cleans up), then `move_task → done`. If the merge conflicts, resolve it in the main checkout like any merge conflict — the worktree and branch stay until it's resolved.
    - **fail** → fold the findings into the card's requirements (`update_task`), `move_task → in_progress`, redispatch `builder` into the same worktree (do NOT remove it).
    - Hard cap: 2 review rounds. After a second fail, stop and surface the findings to the user. Abandoning a card: `kankan worktree remove <id> --force`.
+6. **Blockers**: a builder that hits a decision it can't make (ambiguous/contradictory spec, a destructive action to confirm, a missing secret, an unresolved architectural fork) calls `raise_blocker` and stops — the card stays put but jumps to the top of Attention flagged `blocked`. Get the human's decision, then clear it: `resolve_blocker` after folding the answer into the card's `requirements`, or `redirect_task` for a new direction, or just re-dispatch the builder (`assign_card`) — the last two clear the flag automatically.
 
 ## Rules
 
 - The `in_progress` / `in_review` transitions are fired automatically: by lifecycle hooks, and by the daemon when a builder checks the last acceptance criterion. `assign_card` also forces the card to `in_progress` (an assigned card is never left in `backlog`/`queued`, even when several are dispatched at once). Your `move_task` calls are for judgment moves only: `queued`, `done`, and fail→`in_progress` routing. Phase transitions (`create_phase`, `advance_phase`) are likewise your judgment — advance only when the active phase is genuinely complete.
+- A `blocked` flag is orthogonal to the lane — a builder raises it in place and it's the top Attention signal until you resolve it. It clears on `resolve_blocker`, `redirect_task`, `assign_card`, or a move to `done`; don't leave a card blocked once you've acted.
 - Treat any subagent summary as intent, not proof. Verify with the diff and tests.
 - Keep board chatter terse; don't echo full requirement bodies back into conversation unless asked.
