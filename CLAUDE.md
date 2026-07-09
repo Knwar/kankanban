@@ -9,29 +9,46 @@ Lanes: `backlog → queued → in_progress → in_review → done`
 ## Session start
 
 - On a feature request: `get_or_create_project` with the absolute cwd; use the returned `project_id` for everything after.
-- "What am I on?" → `get_active_card`. Use `get_board` sparingly — it's the expensive read.
+- "What am I on?" → `get_active_card`. "Where are we?" → `get_phases` (the roadmap + per-phase progress). Use `get_board` sparingly — it's the expensive read.
 
-## Planning
+## Project kickoff (from scratch — run once)
 
-- Decompose feature requests with the `planner` subagent (pass it the `project_id` and the request). It creates backlog cards with `depends_on` ordering.
-- Any card touching shared/central files (package manifests, routing, DI container, barrel/export files, DB migrations) is non-parallelizable: later cards that touch the same area must `depends_on` it.
+A from-scratch project is planned as **phases** before any cards exist. This runs ONCE, only while the project has no phases (`get_phases` is empty). Never re-run it mid-project.
+
+1. **Draft**: dispatch the `manager` subagent with the `project_id` and the brief. It returns an ordered set of phases (title + goal each) — a proposal, not board writes.
+2. **Discuss & commit**: talk the phases through with the user, refine, then commit each in order with `create_phase` (title + goal). Judgment gate — commit only what's agreed.
+3. **Kick off**: `advance_phase` (with nothing active yet, it activates the first phase), then enter the phase loop.
+
+Single feature on an existing/flat project (no phases)? Skip all this: decompose with `planner` directly (no `phase_id`) and work the cards. Manager mode is only for whole-project, from-scratch starts.
+
+## Phase loop
+
+For the active phase:
+
+1. **Plan its cards**: dispatch `planner` with the `project_id`, the active `phase_id`, and the phase goal. It creates that phase's backlog cards (each carrying `phase_id`) with `depends_on` ordering. Card planning is lazy — one phase at a time, only once it's active.
+2. **Work the cards**: run each through *Working a card* below. `get_next_card` already returns only the active phase's cards.
+3. **Advance**: when every card in the phase is `done` (`get_phases` progress), `advance_phase` — it marks the phase done and activates the next. Post the user a short recap at each boundary (what the phase delivered, what's next), then plan the next phase. When `advance_phase` returns null, the roadmap is finished.
+
+Any card touching shared/central files (package manifests, routing, DI container, barrel/export files, DB migrations) is non-parallelizable: later cards that touch the same area must `depends_on` it.
 
 ## Working a card
 
 1. **Pick**: `get_next_card` (it respects `depends_on`). Discuss requirements with the user, then write the agreed spec into the card with `update_task` BEFORE any building — both `requirements` (description) and `subtasks` (acceptance criteria: small, verifiable steps the builder checks off). `move_task → queued` once it's ready for dispatch.
 2. **Dispatch**: create the isolation worktree, then record the assignment, then spawn the builder:
    - `kankan worktree add <id>` (creates `.trees/<id>` on branch `card/<id>`)
-   - `assign_card(task_id, <agent label>, .trees/<id>, card/<id>)`
-   - Spawn `builder` with: card id, the full requirements text, and the worktree path.
+   - `assign_card(task_id, <agent label>, .trees/<id>, card/<id>)` — pass a **team member's name/id** as the agent (see `get_team`) and the card picks up that persona's `skill`. The assign response and the card carry the resolved `skill`.
+   - Spawn `builder` with: card id, the full requirements text, the worktree path, **and, if the card has a `skill`, that skill name** so the builder loads it.
 3. **Parallelism**: dispatch two builders at once only when their cards have disjoint `depends_on` AND disjoint file scope — spawn both Task calls in a single message so they run concurrently. Never two builders in one worktree.
 4. **Review**: when a card reaches `in_review`, get the real diff yourself — `git -C .trees/<id> diff main...card/<id>` — and spawn `reviewer` with: card id, requirements, that diff, and the worktree path. The reviewer judges the diff, never the builder's self-report.
 5. **Route the verdict** (your judgment):
    - **pass** → `kankan worktree merge <id>` (merges `card/<id>` into main and cleans up), then `move_task → done`. If the merge conflicts, resolve it in the main checkout like any merge conflict — the worktree and branch stay until it's resolved.
    - **fail** → fold the findings into the card's requirements (`update_task`), `move_task → in_progress`, redispatch `builder` into the same worktree (do NOT remove it).
    - Hard cap: 2 review rounds. After a second fail, stop and surface the findings to the user. Abandoning a card: `kankan worktree remove <id> --force`.
+6. **Blockers**: a builder that hits a decision it can't make (ambiguous/contradictory spec, a destructive action to confirm, a missing secret, an unresolved architectural fork) calls `raise_blocker` and stops — the card stays put but jumps to the top of Attention flagged `blocked`. Get the human's decision, then clear it: `resolve_blocker` after folding the answer into the card's `requirements`, or `redirect_task` for a new direction, or just re-dispatch the builder (`assign_card`) — the last two clear the flag automatically.
 
 ## Rules
 
-- The `in_progress` / `in_review` transitions are fired automatically: by lifecycle hooks, and by the daemon when a builder checks the last acceptance criterion. Your `move_task` calls are for judgment moves only: `queued`, `done`, and fail→`in_progress` routing. (Until the hooks are installed, do the mechanical moves manually too.)
+- The `in_progress` / `in_review` transitions are fired automatically: by lifecycle hooks, and by the daemon when a builder checks the last acceptance criterion. `assign_card` also forces the card to `in_progress` (an assigned card is never left in `backlog`/`queued`, even when several are dispatched at once). Your `move_task` calls are for judgment moves only: `queued`, `done`, and fail→`in_progress` routing. Phase transitions (`create_phase`, `advance_phase`) are likewise your judgment — advance only when the active phase is genuinely complete.
+- A `blocked` flag is orthogonal to the lane — a builder raises it in place and it's the top Attention signal until you resolve it. It clears on `resolve_blocker`, `redirect_task`, `assign_card`, or a move to `done`; don't leave a card blocked once you've acted.
 - Treat any subagent summary as intent, not proof. Verify with the diff and tests.
 - Keep board chatter terse; don't echo full requirement bodies back into conversation unless asked.

@@ -89,3 +89,43 @@ export function cardIdFromEvent(data) {
   // 3) tail of the main transcript (most recent dispatch wins)
   return scanFile(data.transcript_path, 64 * 1024);
 }
+
+/** Path to a subagent's own transcript, if resolvable. */
+export function subagentTranscriptPath(data) {
+  const candidates = [data.agent_transcript_path];
+  if (data.transcript_path && data.agent_id) {
+    candidates.push(String(data.transcript_path).replace(/\.jsonl$/, `/subagents/agent-${data.agent_id}.jsonl`));
+  }
+  for (const c of candidates) {
+    const p = expand(c);
+    if (p && existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** Sum billable tokens (total + output) across a transcript's assistant messages. */
+export function sumTokens(file) {
+  try {
+    let tokens = 0;
+    let out = 0;
+    for (const line of readFileSync(expand(file), 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      let u;
+      try {
+        u = JSON.parse(line)?.message?.usage;
+      } catch {
+        continue;
+      }
+      if (!u) continue;
+      tokens +=
+        (u.input_tokens || 0) +
+        (u.cache_creation_input_tokens || 0) +
+        (u.cache_read_input_tokens || 0) +
+        (u.output_tokens || 0);
+      out += u.output_tokens || 0;
+    }
+    return { tokens, tokens_out: out };
+  } catch {
+    return { tokens: 0, tokens_out: 0 };
+  }
+}

@@ -69,13 +69,14 @@ server.registerTool(
 server.registerTool(
   'create_task',
   {
-    description: 'Create a task in the backlog. Returns {task_id}.',
+    description: 'Create a task in the backlog. Returns {task_id}. Pass phase_id to file it under a phase.',
     inputSchema: {
       project_id: z.string(),
       title: z.string(),
       tag: z.enum(['ui', 'api', 'db', 'infra']).optional(),
       requirements: z.string().optional(),
       depends_on: z.array(z.string()).optional(),
+      phase_id: z.string().optional(),
     },
   },
   (input) => api('POST', '/task', input),
@@ -125,16 +126,58 @@ server.registerTool(
 server.registerTool(
   'assign_card',
   {
-    description: 'Record dispatch: which agent owns the card, in which worktree, on which branch.',
+    description:
+      'Record dispatch: which agent owns the card, in which worktree, on which branch. Pass a team member’s name/id as `agent` (or a `skill`) and the card picks up that persona’s skill for the builder to load.',
     inputSchema: {
       task_id: z.string(),
       agent: z.string(),
       worktree_path: z.string(),
       branch: z.string(),
+      skill: z.string().optional(),
     },
   },
-  ({ task_id, agent, worktree_path, branch }) =>
-    api('PATCH', `/task/${task_id}`, { assigned_agent: agent, worktree_path, branch }),
+  ({ task_id, agent, worktree_path, branch, skill }) =>
+    api('PATCH', `/task/${task_id}`, { assigned_agent: agent, worktree_path, branch, skill }),
+);
+
+server.registerTool(
+  'delete_task',
+  {
+    description:
+      'Permanently delete a card and its history (reviews, events), and strip it from other cards’ depends_on. Irreversible — for mistakes, duplicates, and throwaways, not for finished work (move that to done).',
+    inputSchema: { task_id: z.string() },
+  },
+  ({ task_id }) => api('DELETE', `/task/${task_id}`),
+);
+
+server.registerTool(
+  'redirect_task',
+  {
+    description:
+      'Abandon a card’s current approach and reset it for a fresh start: clears the assignment/worktree/branch, resets the review-round counter and acceptance criteria, and returns it to the backlog. Pass requirements to set the new direction. Use when the approach is wrong (not just buggy) — then remove the stale worktree (kankan worktree remove <id> --force) and re-plan before redispatching.',
+    inputSchema: { task_id: z.string(), requirements: z.string().optional(), note: z.string().optional() },
+  },
+  ({ task_id, ...rest }) => api('POST', `/task/${task_id}/redirect`, rest),
+);
+
+server.registerTool(
+  'raise_blocker',
+  {
+    description:
+      'Builder tool: flag that this card needs a human decision you cannot make yourself — an ambiguous or contradictory spec, a destructive/irreversible action to confirm, a missing secret/credential, or an architectural fork the requirements don’t resolve. Pass a specific question as `reason`, then stop and end your turn. The card stays where it is and jumps to the top of the human’s Attention queue until resolved. Not for ordinary uncertainty — that belongs in your final report.',
+    inputSchema: { task_id: z.string(), reason: z.string() },
+  },
+  ({ task_id, reason }) => api('POST', `/task/${task_id}/block`, { reason, agent: 'builder' }),
+);
+
+server.registerTool(
+  'resolve_blocker',
+  {
+    description:
+      'Clear a card’s blocker once you’ve answered the builder’s question — work can resume. redirect_task and re-dispatching a builder (assign_card) already clear it; use this when you’ve just folded the decision into the card’s requirements without redispatching yet.',
+    inputSchema: { task_id: z.string(), note: z.string().optional() },
+  },
+  ({ task_id, note }) => api('POST', `/task/${task_id}/unblock`, { note }),
 );
 
 server.registerTool(
@@ -157,6 +200,70 @@ server.registerTool(
     },
   },
   ({ task_id, verdict, findings }) => api('POST', `/task/${task_id}/review`, { verdict, findings }),
+);
+
+server.registerTool(
+  'get_stats',
+  {
+    description:
+      'Per-agent project activity: cards touched, wall-clock time, lines added/removed, and tokens used (with output split). Plus project totals.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/stats?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_team',
+  {
+    description:
+      'The team roster: named agents and each one’s assigned skill (persona). Use to pick a specialized agent when dispatching a card.',
+    inputSchema: {},
+  },
+  () => api('GET', '/team'),
+);
+
+server.registerTool(
+  'create_phase',
+  {
+    description:
+      'Add a phase to the project roadmap (status planned). Returns {phase_id}. Manager mode drafts the phases; commit them here after the user approves.',
+    inputSchema: {
+      project_id: z.string(),
+      title: z.string(),
+      goal: z.string().optional(),
+      plan: z.string().optional(),
+    },
+  },
+  (input) => api('POST', '/phase', input),
+);
+
+server.registerTool(
+  'get_phases',
+  {
+    description:
+      'The project roadmap: phases with status (planned|active|done) and card progress. Empty for flat/legacy projects.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/phases?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_next_phase',
+  {
+    description: 'The next planned phase in the roadmap, or null.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/phase/next?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'advance_phase',
+  {
+    description:
+      'Scrum move: complete the active phase and activate the next planned one; returns the newly active phase, or null when the roadmap is finished. With nothing active yet it activates the first phase (kickoff). Use only when the active phase is genuinely done.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('POST', '/phase/advance', { project_id }),
 );
 
 await server.connect(new StdioServerTransport());
