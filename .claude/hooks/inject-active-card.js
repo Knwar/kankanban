@@ -8,5 +8,8 @@ if (!projectId) process.exit(0);
 const active = (await api('GET', `/active?project=${projectId}`)) ?? [];
 if (active.length === 0) process.exit(0); // nothing in flight — no noise
 
-const cards = active.map((c) => `${c.id} "${c.title}"${c.agent ? ` (${c.agent})` : ''}`);
+const cards = active.map((c) => {
+  const who = [c.agent, c.skill && `skill:${c.skill}`].filter(Boolean).join(' · ');
+  return `${c.id} "${c.title}"${who ? ` (${who})` : ''}`;
+});
 console.log(`[kankan] active: ${cards.join('; ')}`);

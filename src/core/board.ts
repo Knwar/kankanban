@@ -3,14 +3,23 @@ import { basename } from 'node:path';
 import type { DB } from './db.js';
 import {
   LANES,
+  type AgentStat,
+  type AttentionItem,
+  type AttentionSeverity,
   type CardSummary,
+  type CardTotals,
+  type ProjectStats,
   type EventType,
   type Lane,
+  type Phase,
+  type PhaseStatus,
+  type PhaseView,
   type Project,
   type ReviewFinding,
   type Subtask,
   type Task,
   type TaskEvent,
+  type TeamMember,
   type Verdict,
 } from './types.js';
 
@@ -88,11 +97,24 @@ export function findProject(db: DB, rootPath: string): Project | undefined {
     | undefined;
 }
 
+/** Unregister a project and everything it owns from the board. The folder on disk is left untouched. */
+export function deleteProject(db: DB, projectId: string): void {
+  db.transaction(() => {
+    const tasks = db.prepare('SELECT id FROM tasks WHERE project_id = ?').all(projectId) as { id: string }[];
+    for (const { id } of tasks) db.prepare('DELETE FROM reviews WHERE task_id = ?').run(id);
+    db.prepare('DELETE FROM card_activity WHERE project_id = ?').run(projectId);
+    db.prepare('DELETE FROM task_events WHERE project_id = ?').run(projectId);
+    db.prepare('DELETE FROM tasks WHERE project_id = ?').run(projectId);
+    db.prepare('DELETE FROM phases WHERE project_id = ?').run(projectId);
+    db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+  })();
+}
+
 export function createTask(
   db: DB,
   projectId: string,
   title: string,
-  opts: { tag?: string; requirements?: string; depends_on?: string[] } = {},
+  opts: { tag?: string; requirements?: string; depends_on?: string[]; phase_id?: string } = {},
 ): Task {
   const ts = now();
   const max = db
@@ -101,10 +123,12 @@ export function createTask(
   const task: Task = {
     id: shortId(),
     project_id: projectId,
+    phase_id: opts.phase_id ?? null,
     title,
     lane: 'backlog',
     requirements: opts.requirements ?? null,
     tag: opts.tag ?? null,
+    skill: null,
     assigned_agent: null,
     worktree_path: null,
     branch: null,
@@ -116,11 +140,12 @@ export function createTask(
     updated_at: ts,
   };
   db.prepare(
-    `INSERT INTO tasks (id, project_id, title, lane, requirements, tag, depends_on, position, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, project_id, phase_id, title, lane, requirements, tag, depends_on, position, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     task.id,
     task.project_id,
+    task.phase_id,
     task.title,
     task.lane,
     task.requirements,
@@ -130,7 +155,12 @@ export function createTask(
     task.created_at,
     task.updated_at,
   );
-  appendEvent(db, { project_id: projectId, task_id: task.id, type: 'create', payload: { title } });
+  appendEvent(db, {
+    project_id: projectId,
+    task_id: task.id,
+    type: 'create',
+    payload: { title, phase_id: task.phase_id },
+  });
   return task;
 }
 
@@ -183,25 +213,90 @@ export function moveTask(db: DB, taskId: string, lane: string, agent?: string): 
   return getTask(db, taskId);
 }
 
+/**
+ * Permanently remove a card and its history (reviews, events), and strip it
+ * from any other card's depends_on so nothing is left blocked on a ghost.
+ * Irreversible — for mistakes and throwaways.
+ */
+export function deleteTask(db: DB, taskId: string): { id: string; title: string; project_id: string } {
+  const task = getTask(db, taskId);
+  db.transaction(() => {
+    // unblock dependents: drop this id from their depends_on arrays
+    const dependents = db
+      .prepare(`SELECT id, depends_on FROM tasks WHERE project_id = ? AND depends_on LIKE ?`)
+      .all(task.project_id, `%"${taskId}"%`) as { id: string; depends_on: string }[];
+    for (const d of dependents) {
+      const deps = (JSON.parse(d.depends_on) as string[]).filter((x) => x !== taskId);
+      db.prepare('UPDATE tasks SET depends_on = ? WHERE id = ?').run(deps.length ? JSON.stringify(deps) : null, d.id);
+    }
+    db.prepare('DELETE FROM reviews WHERE task_id = ?').run(taskId);
+    db.prepare('DELETE FROM task_events WHERE task_id = ?').run(taskId);
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
+    appendEvent(db, { project_id: task.project_id, type: 'delete', payload: { id: taskId, title: task.title } });
+  })();
+  return { id: taskId, title: task.title, project_id: task.project_id };
+}
+
+/**
+ * Abandon a card's current approach and reset it for a fresh start: clears the
+ * assignment/worktree/branch, resets the review-round counter and acceptance
+ * criteria, and returns it to the backlog. Pass requirements to set the new
+ * direction. The old git worktree is removed separately by the orchestrator.
+ */
+export function redirectTask(
+  db: DB,
+  taskId: string,
+  opts: { requirements?: string; note?: string } = {},
+): Task {
+  const task = getTask(db, taskId);
+  db.prepare(
+    `UPDATE tasks SET lane = 'backlog', assigned_agent = NULL, worktree_path = NULL, branch = NULL,
+     review_rounds = 0, subtasks = NULL, requirements = COALESCE(?, requirements), updated_at = ? WHERE id = ?`,
+  ).run(opts.requirements ?? null, now(), taskId);
+  appendEvent(db, {
+    project_id: task.project_id,
+    task_id: taskId,
+    type: 'redirect',
+    payload: { from: task.lane, note: opts.note ?? null },
+  });
+  return getTask(db, taskId);
+}
+
+/** Match an assignment label to a team member — by agent id first, then name. */
+function teamMemberByLabel(db: DB, label: string): TeamMember | undefined {
+  return db.prepare('SELECT * FROM team_members WHERE id = ? OR name = ? LIMIT 1').get(label, label) as
+    | TeamMember
+    | undefined;
+}
+
 export function assignCard(
   db: DB,
   taskId: string,
   agent: string,
   worktreePath: string,
   branch: string,
+  skill?: string | null,
 ): Task {
-  const task = updateTask(db, taskId, {
-    assigned_agent: agent,
-    worktree_path: worktreePath,
-    branch,
-  });
+  // The card picks up the assigned agent's skill (persona): an explicit skill
+  // wins, else the matching team member's, so the builder knows which to load.
+  const resolvedSkill = skill ?? teamMemberByLabel(db, agent)?.skill ?? null;
+  updateTask(db, taskId, { assigned_agent: agent, worktree_path: worktreePath, branch });
+  db.prepare('UPDATE tasks SET skill = ?, updated_at = ? WHERE id = ?').run(resolvedSkill, now(), taskId);
+  const task = getTask(db, taskId);
   appendEvent(db, {
     project_id: task.project_id,
     task_id: taskId,
     type: 'assign',
-    payload: { worktree: worktreePath, branch },
+    payload: { worktree: worktreePath, branch, skill: resolvedSkill },
     agent,
   });
+  // Invariant: an assigned card is actively owned by an agent, so it belongs in
+  // in_progress — never left behind in backlog/queued. Enforced here (the card id
+  // is known exactly) so several cards dispatched at once each advance reliably,
+  // instead of racing on a hook's "first queued card" guess.
+  if (task.lane === 'backlog' || task.lane === 'queued') {
+    return moveTask(db, taskId, 'in_progress', agent);
+  }
   return task;
 }
 
@@ -229,6 +324,108 @@ export function recordReview(
     payload: { verdict, round, findings: findings.length },
   });
   return { task_id: taskId, round, verdict };
+}
+
+// ── phases ────────────────────────────────────────────────────────
+export function createPhase(
+  db: DB,
+  projectId: string,
+  title: string,
+  opts: { goal?: string; plan?: string } = {},
+): Phase {
+  const ts = now();
+  const max = db
+    .prepare('SELECT MAX(position) AS max FROM phases WHERE project_id = ?')
+    .get(projectId) as { max: number | null };
+  const phase: Phase = {
+    id: shortId(),
+    project_id: projectId,
+    title,
+    goal: opts.goal ?? null,
+    plan: opts.plan ?? null,
+    status: 'planned',
+    position: (max.max ?? 0) + 1,
+    created_at: ts,
+    updated_at: ts,
+  };
+  db.prepare(
+    `INSERT INTO phases (id, project_id, title, goal, plan, status, position, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    phase.id,
+    phase.project_id,
+    phase.title,
+    phase.goal,
+    phase.plan,
+    phase.status,
+    phase.position,
+    phase.created_at,
+    phase.updated_at,
+  );
+  appendEvent(db, { project_id: projectId, type: 'phase_create', payload: { phase_id: phase.id, title } });
+  return phase;
+}
+
+export function getPhase(db: DB, phaseId: string): Phase {
+  const phase = db.prepare('SELECT * FROM phases WHERE id = ?').get(phaseId) as Phase | undefined;
+  if (!phase) throw new Error(`no such phase: ${phaseId}`);
+  return phase;
+}
+
+export function getActivePhase(db: DB, projectId: string): Phase | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM phases WHERE project_id = ? AND status = 'active' ORDER BY position LIMIT 1`)
+      .get(projectId) as Phase | undefined) ?? null
+  );
+}
+
+export function getNextPhase(db: DB, projectId: string): Phase | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM phases WHERE project_id = ? AND status = 'planned' ORDER BY position LIMIT 1`)
+      .get(projectId) as Phase | undefined) ?? null
+  );
+}
+
+/** Phases with card progress — powers the drawer and the orchestrator's judgment. */
+export function getPhases(db: DB, projectId: string): PhaseView[] {
+  const phases = db
+    .prepare('SELECT * FROM phases WHERE project_id = ? ORDER BY position')
+    .all(projectId) as Phase[];
+  const prog = db.prepare(
+    `SELECT COUNT(*) AS total, SUM(lane = 'done') AS done FROM tasks WHERE phase_id = ?`,
+  );
+  return phases.map((p) => {
+    const { total, done } = prog.get(p.id) as { total: number; done: number | null };
+    return {
+      id: p.id,
+      title: p.title,
+      goal: p.goal,
+      status: p.status,
+      position: p.position,
+      progress: { done: done ?? 0, total },
+    };
+  });
+}
+
+function setPhaseStatus(db: DB, phaseId: string, status: PhaseStatus, type: EventType): Phase {
+  const phase = getPhase(db, phaseId);
+  db.prepare('UPDATE phases SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), phaseId);
+  appendEvent(db, { project_id: phase.project_id, type, payload: { phase_id: phaseId, title: phase.title } });
+  return getPhase(db, phaseId);
+}
+
+/**
+ * Scrum move: complete the current active phase (if any), then activate the
+ * next planned one. Returns the newly active phase, or null when none remain.
+ * Doubles as kickoff — with nothing active yet, it just activates the first.
+ */
+export function advancePhase(db: DB, projectId: string): Phase | null {
+  const active = getActivePhase(db, projectId);
+  if (active) setPhaseStatus(db, active.id, 'done', 'phase_done');
+  const next = getNextPhase(db, projectId);
+  return next ? setPhaseStatus(db, next.id, 'active', 'phase_activate') : null;
 }
 
 /** Acceptance-criteria progress for a card's subtasks JSON, or null if none. */
@@ -301,7 +498,7 @@ export function checkSubtask(
 }
 
 const CARD_COLUMNS =
-  'id, title, lane, tag, assigned_agent AS agent, review_rounds AS rounds, updated_at, subtasks';
+  'id, title, lane, tag, skill, assigned_agent AS agent, review_rounds AS rounds, updated_at, phase_id, subtasks';
 
 function toSummary(row: CardSummary & { subtasks: string | null }): CardSummary {
   const { subtasks, ...card } = row;
@@ -326,11 +523,21 @@ export function getActiveCards(db: DB, projectId: string): CardSummary[] {
   ).map(toSummary);
 }
 
-/** Top backlog card whose depends_on are all done, or null. */
+/**
+ * Top backlog card whose depends_on are all done, or null. Scoped to the active
+ * phase when the project has one; otherwise (flat/legacy) the whole backlog.
+ */
 export function getNextCard(db: DB, projectId: string): Task | null {
-  const backlog = db
-    .prepare(`SELECT * FROM tasks WHERE project_id = ? AND lane = 'backlog' ORDER BY position`)
-    .all(projectId) as Task[];
+  const active = getActivePhase(db, projectId);
+  const backlog = (
+    active
+      ? db.prepare(
+          `SELECT * FROM tasks WHERE project_id = ? AND lane = 'backlog' AND phase_id = ? ORDER BY position`,
+        ).all(projectId, active.id)
+      : db.prepare(
+          `SELECT * FROM tasks WHERE project_id = ? AND lane = 'backlog' ORDER BY position`,
+        ).all(projectId)
+  ) as Task[];
   const isDone = db.prepare(`SELECT 1 FROM tasks WHERE id = ? AND lane = 'done'`);
   for (const task of backlog) {
     const deps: string[] = task.depends_on ? JSON.parse(task.depends_on) : [];
@@ -343,4 +550,226 @@ export function getRecentEvents(db: DB, projectId: string, limit = 20): TaskEven
   return db
     .prepare('SELECT * FROM task_events WHERE project_id = ? ORDER BY id DESC LIMIT ?')
     .all(projectId, limit) as TaskEvent[];
+}
+
+// ── team roster: named agents + their assigned skill (persona) ──────
+export function listTeam(db: DB): TeamMember[] {
+  return db.prepare('SELECT * FROM team_members ORDER BY created_at').all() as TeamMember[];
+}
+
+export function createTeamMember(
+  db: DB,
+  name: string,
+  opts: { skill?: string | null; color?: string | null } = {},
+): TeamMember {
+  const member: TeamMember = {
+    id: shortId(),
+    name,
+    skill: opts.skill ?? null,
+    color: opts.color ?? null,
+    created_at: now(),
+  };
+  db.prepare('INSERT INTO team_members (id, name, skill, color, created_at) VALUES (?, ?, ?, ?, ?)').run(
+    member.id,
+    member.name,
+    member.skill,
+    member.color,
+    member.created_at,
+  );
+  return member;
+}
+
+const TEAM_FIELDS = ['name', 'skill', 'color'] as const;
+
+export function updateTeamMember(
+  db: DB,
+  id: string,
+  patch: Partial<Pick<TeamMember, 'name' | 'skill' | 'color'>>,
+): TeamMember {
+  const sets: string[] = [];
+  const values: (string | null)[] = [];
+  for (const field of TEAM_FIELDS) {
+    if (!(field in patch)) continue;
+    sets.push(`${field} = ?`);
+    values.push(patch[field] ?? null);
+  }
+  if (sets.length) db.prepare(`UPDATE team_members SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+  const member = db.prepare('SELECT * FROM team_members WHERE id = ?').get(id) as TeamMember | undefined;
+  if (!member) throw new Error(`no such team member: ${id}`);
+  return member;
+}
+
+export function deleteTeamMember(db: DB, id: string): void {
+  db.prepare('DELETE FROM team_members WHERE id = ?').run(id);
+}
+
+// ── activity stats: tokens / lines / time per build run ─────────────
+export function recordActivity(
+  db: DB,
+  a: {
+    project_id: string;
+    task_id: string;
+    agent?: string | null;
+    agent_id?: string | null;
+    tokens: number;
+    tokens_out: number;
+    lines_added: number;
+    lines_removed: number;
+    ms: number;
+  },
+): void {
+  db.prepare(
+    `INSERT INTO card_activity (project_id, task_id, agent, agent_id, tokens, tokens_out, lines_added, lines_removed, ms, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    a.project_id,
+    a.task_id,
+    a.agent ?? null,
+    a.agent_id ?? null,
+    a.tokens,
+    a.tokens_out,
+    a.lines_added,
+    a.lines_removed,
+    a.ms,
+    now(),
+  );
+}
+
+const TOTALS_SELECT = `COALESCE(SUM(tokens),0) AS tokens, COALESCE(SUM(tokens_out),0) AS tokens_out,
+  COALESCE(SUM(lines_added),0) AS lines_added, COALESCE(SUM(lines_removed),0) AS lines_removed, COALESCE(SUM(ms),0) AS ms`;
+
+export function cardTotals(db: DB, taskId: string): CardTotals {
+  return db
+    .prepare(`SELECT ${TOTALS_SELECT} FROM card_activity WHERE task_id = ?`)
+    .get(taskId) as CardTotals;
+}
+
+export function getStats(db: DB, projectId: string): ProjectStats {
+  const agents = db
+    .prepare(
+      `SELECT COALESCE(agent, '—') AS agent, COUNT(DISTINCT task_id) AS cards, ${TOTALS_SELECT}
+       FROM card_activity WHERE project_id = ? GROUP BY agent ORDER BY tokens DESC`,
+    )
+    .all(projectId) as AgentStat[];
+  const totals = db
+    .prepare(`SELECT COUNT(DISTINCT task_id) AS cards, ${TOTALS_SELECT} FROM card_activity WHERE project_id = ?`)
+    .get(projectId) as CardTotals & { cards: number };
+  return { totals, agents };
+}
+
+// ── attention: the "manage by exception" queue ──────────────────────
+const STALL_WARN_MS = 15 * 60_000;
+const STALL_HARD_MS = 40 * 60_000;
+const REVIEW_GRACE_MS = 10 * 60_000;
+const MERGE_GRACE_MS = 10 * 60_000;
+const SEV_RANK: Record<AttentionSeverity, number> = { blocker: 0, warn: 1, info: 2 };
+
+/**
+ * Cards that need a human decision, ranked. Pure reads over tasks/reviews/
+ * task_events. One row per card — the most severe applicable reason wins.
+ */
+export function getAttention(db: DB, projectId: string): AttentionItem[] {
+  const nowTs = now();
+  const tasks = db
+    .prepare(
+      `SELECT id, title, lane, requirements, subtasks, depends_on, assigned_agent, phase_id, created_at
+       FROM tasks WHERE project_id = ? AND lane != 'done'`,
+    )
+    .all(projectId) as Pick<
+    Task,
+    'id' | 'title' | 'lane' | 'requirements' | 'subtasks' | 'depends_on' | 'assigned_agent' | 'phase_id' | 'created_at'
+  >[];
+
+  // impact: how many open cards depend on each card
+  const blocking = new Map<string, number>();
+  for (const t of tasks) {
+    const deps: string[] = t.depends_on ? JSON.parse(t.depends_on) : [];
+    for (const d of deps) blocking.set(d, (blocking.get(d) ?? 0) + 1);
+  }
+
+  const lastEventAt = db.prepare(`SELECT MAX(created_at) AS t FROM task_events WHERE task_id = ?`);
+  const failCount = db.prepare(`SELECT COUNT(*) AS c FROM reviews WHERE task_id = ? AND verdict = 'fail'`);
+  const lastFailAt = db.prepare(`SELECT MAX(created_at) AS t FROM reviews WHERE task_id = ? AND verdict = 'fail'`);
+  const latestReview = db.prepare(`SELECT verdict, created_at FROM reviews WHERE task_id = ? ORDER BY id DESC LIMIT 1`);
+  const enteredInReview = db.prepare(
+    `SELECT MAX(created_at) AS t FROM task_events WHERE task_id = ? AND type = 'move' AND payload LIKE '%"to":"in_review"%'`,
+  );
+
+  const mins = (ms: number) => Math.round(ms / 60_000);
+  const items: AttentionItem[] = [];
+
+  for (const t of tasks) {
+    const base = {
+      card_id: t.id,
+      title: t.title,
+      blocking: blocking.get(t.id) ?? 0,
+      agent: t.assigned_agent,
+      phase_id: t.phase_id,
+    };
+    const fails = (failCount.get(t.id) as { c: number }).c;
+    const latest = latestReview.get(t.id) as { verdict: string; created_at: number } | undefined;
+
+    if (fails >= 2) {
+      items.push({
+        ...base,
+        kind: 'review_failed',
+        severity: 'blocker',
+        reason: `Failed review ${fails}× — hard cap, needs your call`,
+        since: (lastFailAt.get(t.id) as { t: number | null }).t ?? t.created_at,
+      });
+      continue;
+    }
+    if (latest?.verdict === 'pass' && nowTs - latest.created_at > MERGE_GRACE_MS) {
+      items.push({
+        ...base,
+        kind: 'merge_conflict',
+        severity: 'blocker',
+        reason: 'Passed review but not merged — check for conflict',
+        since: latest.created_at,
+      });
+      continue;
+    }
+    if (t.lane === 'in_progress') {
+      const last = (lastEventAt.get(t.id) as { t: number | null }).t ?? t.created_at;
+      const idle = nowTs - last;
+      if (idle > STALL_WARN_MS) {
+        items.push({
+          ...base,
+          kind: 'stalled',
+          severity: idle > STALL_HARD_MS ? 'blocker' : 'warn',
+          reason: `Agent quiet ${mins(idle)}m — may be stuck`,
+          since: last,
+        });
+        continue;
+      }
+    }
+    if (t.lane === 'in_review') {
+      const entered = (enteredInReview.get(t.id) as { t: number | null }).t ?? t.created_at;
+      if ((!latest || latest.created_at < entered) && nowTs - entered > REVIEW_GRACE_MS) {
+        items.push({
+          ...base,
+          kind: 'awaiting_review',
+          severity: 'warn',
+          reason: `In review ${mins(nowTs - entered)}m, no verdict — dispatch reviewer`,
+          since: entered,
+        });
+        continue;
+      }
+    }
+    if (t.lane === 'backlog' && !t.requirements && !t.subtasks) {
+      items.push({
+        ...base,
+        kind: 'needs_spec',
+        severity: 'warn',
+        reason: 'No spec yet — write requirements before dispatch',
+        since: t.created_at,
+      });
+      continue;
+    }
+  }
+
+  items.sort(
+    (a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity] || b.blocking - a.blocking || a.since - b.since,
+  );
+  return items;
 }

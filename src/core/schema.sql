@@ -5,13 +5,27 @@ CREATE TABLE IF NOT EXISTS projects (
   created_at  INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS phases (
+  id          TEXT PRIMARY KEY,           -- short id
+  project_id  TEXT NOT NULL REFERENCES projects(id),
+  title       TEXT NOT NULL,
+  goal        TEXT,                       -- markdown: what this phase delivers
+  plan        TEXT,                       -- markdown: per-phase implementation plan (filled lazily)
+  status      TEXT NOT NULL DEFAULT 'planned',   -- planned|active|done
+  position    INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id             TEXT PRIMARY KEY,        -- short id, also used as worktree name
   project_id     TEXT NOT NULL REFERENCES projects(id),
+  phase_id       TEXT,                    -- the phase this card belongs to, or null (flat/legacy)
   title          TEXT NOT NULL,
   lane           TEXT NOT NULL DEFAULT 'backlog',   -- backlog|queued|in_progress|in_review|done
   requirements   TEXT,                    -- markdown, authored from discussion
   tag            TEXT,                    -- ui|api|db|infra
+  skill          TEXT,                    -- assigned persona skill name (from the team roster)
   assigned_agent TEXT,                    -- current owner label
   worktree_path  TEXT,                    -- .trees/<id>  (also the agent<->card correlation key)
   branch         TEXT,                    -- card/<id>
@@ -42,5 +56,28 @@ CREATE TABLE IF NOT EXISTS reviews (
   created_at  INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS team_members (  -- named agents + their assigned skill (persona)
+  id          TEXT PRIMARY KEY,           -- agent id (short id)
+  name        TEXT NOT NULL,
+  skill       TEXT,                       -- assigned skill name (persona), or null
+  color       TEXT,                       -- hex for the UI chip
+  created_at  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS card_activity (  -- one row per build run: cost + churn + time
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id    TEXT NOT NULL,
+  task_id       TEXT NOT NULL,
+  agent         TEXT,                      -- label / persona name
+  agent_id      TEXT,                      -- subagent id
+  tokens        INTEGER NOT NULL DEFAULT 0,   -- total billable tokens for the run
+  tokens_out    INTEGER NOT NULL DEFAULT 0,   -- output tokens (subset of tokens)
+  lines_added   INTEGER NOT NULL DEFAULT 0,
+  lines_removed INTEGER NOT NULL DEFAULT 0,
+  ms            INTEGER NOT NULL DEFAULT 0,   -- wall-clock of the build run
+  created_at    INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project_lane ON tasks(project_id, lane, position);
+CREATE INDEX IF NOT EXISTS idx_phases_project ON phases(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_events_recent ON task_events(project_id, created_at);

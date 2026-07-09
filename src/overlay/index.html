@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>KanKanBan</title>
+  <link rel="stylesheet" href="xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -15,10 +16,6 @@
         </button>
         <div id="project-menu" class="hidden"></div>
       </div>
-      <button id="branch-chip" class="hidden" title="Changes / commit">
-        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
-        <span id="branch-name"></span>
-      </button>
       <span id="conn" class="conn offline">offline</span>
     </div>
     <div class="head-center" id="claude-usage" title="Claude subscription usage limits">
@@ -28,38 +25,96 @@
       <span class="usage" id="usage-wk"><label>week</label><span class="ubar"><span class="ufill"></span></span><span class="upct">—</span></span>
     </div>
     <div class="head-right">
+      <button id="settings-btn" title="Settings">⚙</button>
       <span id="stats"></span>
       <span id="timer">0:00:00</span>
     </div>
   </header>
-  <main id="board"></main>
+  <div id="workspace">
+    <nav id="activity-rail">
+      <button id="rail-attention" class="rail-tab" title="Attention">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M8 1.5A3.5 3.5 0 0 0 4.5 5v1.9c0 .35-.13.69-.37.95l-.98 1.06A1 1 0 0 0 3.88 11.5h8.24a1 1 0 0 0 .73-1.69l-.98-1.06a1.4 1.4 0 0 1-.37-.95V5A3.5 3.5 0 0 0 8 1.5ZM6.5 12.5a1.5 1.5 0 0 0 3 0h-3Z"/></svg>
+      </button>
+      <button id="rail-kanban" class="rail-tab active" title="Board">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M2 2.75A.75.75 0 0 1 2.75 2h2a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-2a.75.75 0 0 1-.75-.75V2.75Zm4.5 0A.75.75 0 0 1 7.25 2h2a.75.75 0 0 1 .75.75v6.5a.75.75 0 0 1-.75.75h-2a.75.75 0 0 1-.75-.75v-6.5Zm4.5 0A.75.75 0 0 1 11.75 2h2a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-2a.75.75 0 0 1-.75-.75v-8.5Z"/></svg>
+      </button>
+      <button id="rail-scm" class="rail-tab" title="Source Control">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"/></svg>
+      </button>
+      <button id="rail-phases" class="rail-tab" title="Phases">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M2.5 1.75A.75.75 0 0 1 3.25 1h9.5a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-.75.75h-9.5a.75.75 0 0 1-.75-.75v-3Zm0 5.75A.75.75 0 0 1 3.25 6.75h9.5a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-.75.75h-9.5a.75.75 0 0 1-.75-.75v-3Zm.75 4.75a.75.75 0 0 0-.75.75v.25c0 .414.336.75.75.75h9.5a.75.75 0 0 0 .75-.75V13a.75.75 0 0 0-.75-.75h-9.5Z"/></svg>
+      </button>
+      <button id="rail-stats" class="rail-tab" title="Stats">
+        <svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor"><path d="M1.75 13.5a.75.75 0 0 1-.75-.75v-9.5a.75.75 0 0 1 1.5 0v8.75h11a.75.75 0 0 1 0 1.5h-11.75Zm3-2.75a.75.75 0 0 1-.75-.75v-2.5a.75.75 0 0 1 1.5 0v2.5a.75.75 0 0 1-.75.75Zm3.25 0a.75.75 0 0 1-.75-.75v-5a.75.75 0 0 1 1.5 0v5a.75.75 0 0 1-.75.75Zm3.25 0a.75.75 0 0 1-.75-.75v-3.5a.75.75 0 0 1 1.5 0v3.5a.75.75 0 0 1-.75.75Z"/></svg>
+      </button>
+    </nav>
+    <main id="board"></main>
+    <section id="attention-view" class="view hidden">
+      <div id="attention-list" class="view-detail"></div>
+      <div id="office" class="view-detail hidden">
+        <div class="office-floor">
+          <div class="zone zone-desks"><span class="zone-label">Desks</span></div>
+          <div class="zone zone-meeting"><span class="zone-label">Meeting Room</span></div>
+          <div class="zone zone-think"><span class="zone-label">Think Tank</span></div>
+          <div class="zone zone-lounge"><span class="zone-label">Lounge</span></div>
+          <div id="office-agents"></div>
+        </div>
+        <div id="office-attn" class="office-attn collapsed">
+          <button id="office-attn-tab" class="oa-tab"><span class="oa-bell">🔔</span><span id="oa-count" class="oa-count"></span></button>
+          <div id="office-attn-list" class="oa-list"></div>
+        </div>
+      </div>
+    </section>
+    <section id="scm-view" class="view hidden">
+      <div class="view-sidebar">
+        <div class="panel-bar">
+          <span class="panel-heading">Source Control</span>
+          <span id="scm-branch" class="panel-sub"></span>
+        </div>
+        <div id="scm-attach" class="scm-attach hidden">No remote · <button id="scm-attach-btn">Attach GitHub repo</button></div>
+        <div class="git-commit">
+          <input id="commit-msg" placeholder="Commit message" maxlength="120" />
+          <textarea id="commit-desc" placeholder="Description (optional)" rows="2"></textarea>
+          <div class="git-actions">
+            <span id="git-result"></span>
+            <button id="commit-btn">Commit and push</button>
+          </div>
+        </div>
+        <ul id="git-files"></ul>
+      </div>
+      <div id="git-diff" class="view-detail"></div>
+    </section>
+    <section id="phases-view" class="view hidden">
+      <div class="view-sidebar">
+        <div class="panel-bar">
+          <span class="panel-heading">Roadmap</span>
+          <span id="drawer-count" class="panel-sub"></span>
+        </div>
+        <div id="phase-list"></div>
+      </div>
+      <div id="phase-detail" class="view-detail"></div>
+    </section>
+    <section id="stats-view" class="view hidden">
+      <div id="stats-body" class="view-detail"></div>
+    </section>
+  </div>
+  <section id="terminal-panel" class="hidden">
+    <div id="term-resize" title="Drag to resize"></div>
+    <div class="term-bar">
+      <span class="term-label">TERMINAL</span>
+      <span id="term-conn" class="term-conn">connecting…</span>
+      <button id="term-new" title="New session (kills and restarts the shell)">⟳ New session</button>
+      <button id="term-hide" title="Hide terminal">✕</button>
+    </div>
+    <div id="term-host"></div>
+  </section>
   <footer>
     <span id="agent-status" class="idle">● idle</span>
     <div id="headline"></div>
+    <button id="term-btn" class="hidden" title="Toggle terminal (⌃`)">❯_ Terminal</button>
     <button id="teams-btn">0 teams active</button>
   </footer>
   <div id="teams-peek" class="hidden"></div>
-
-  <div id="git-modal" class="hidden">
-    <div class="git-dialog">
-      <div class="git-head">
-        <span id="git-title">changes</span>
-        <button id="git-close">✕</button>
-      </div>
-      <div class="git-body">
-        <ul id="git-files"></ul>
-        <div id="git-diff"></div>
-      </div>
-      <div class="git-commit">
-        <input id="commit-msg" placeholder="Commit message" maxlength="120" />
-        <textarea id="commit-desc" placeholder="Description (optional)" rows="2"></textarea>
-        <div class="git-actions">
-          <span id="git-result"></span>
-          <button id="commit-btn">Commit and push</button>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <div id="card-modal" class="hidden">
     <div class="card-dialog">
@@ -78,6 +133,70 @@
     </div>
   </div>
 
+  <div id="settings-modal" class="hidden">
+    <div class="settings-dialog">
+      <nav class="settings-nav">
+        <div class="settings-title">Settings</div>
+        <button class="st-tab active" data-tab="general">General</button>
+        <button class="st-tab" data-tab="skills">Skills</button>
+        <button class="st-tab" data-tab="team">Team</button>
+      </nav>
+      <div class="settings-main">
+        <button id="settings-close" title="Close">✕</button>
+
+        <section class="st-panel" data-panel="general">
+          <div class="st-head"><h3>Appearance</h3></div>
+          <div class="st-list">
+            <div class="st-list-row">
+              <div class="st-rowtext"><div class="st-rowtitle">Accent color</div><div class="st-rowsub">Recolors highlights across the board</div></div>
+              <div id="accent-swatches" class="swatches"></div>
+            </div>
+            <div class="st-list-row">
+              <div class="st-rowtext"><div class="st-rowtitle">Reduce motion</div><div class="st-rowsub">Turn off card and panel animations</div></div>
+              <label class="switch"><input type="checkbox" id="opt-reduce-motion" /><span class="slider"></span></label>
+            </div>
+            <div class="st-list-row">
+              <div class="st-rowtext"><div class="st-rowtitle">Default view</div><div class="st-rowsub">Which view the board opens on</div></div>
+              <select id="opt-default-view" class="st-select">
+                <option value="smart">Smart — Attention if blockers</option>
+                <option value="kanban">Kanban</option>
+                <option value="attention">Attention</option>
+              </select>
+            </div>
+            <div class="st-list-row">
+              <div class="st-rowtext"><div class="st-rowtitle">Office mode</div><div class="st-rowsub">Show the Attention view as a live office simulation</div></div>
+              <label class="switch"><input type="checkbox" id="opt-office" /><span class="slider"></span></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="st-panel hidden" data-panel="skills">
+          <div class="st-head">
+            <h3>Skills</h3>
+            <button id="skill-new-btn" class="st-primary">New skill</button>
+          </div>
+          <div id="skills-list" class="st-list"></div>
+          <div id="skill-detail" class="st-detail hidden"></div>
+        </section>
+
+        <section class="st-panel hidden" data-panel="team">
+          <div class="st-head">
+            <h3>Team</h3>
+            <button id="team-add-toggle" class="st-primary">Add member</button>
+          </div>
+          <div id="team-form" class="st-form hidden">
+            <div class="st-field"><label>Name</label><input id="team-name" placeholder="e.g. Ada" maxlength="40" /></div>
+            <div class="st-field"><label>Skill (persona)</label><select id="team-skill" class="st-select"><option value="">No skill</option></select></div>
+            <div class="st-form-actions"><button id="team-cancel" class="st-ghost">Cancel</button><button id="team-add-btn" class="st-primary">Add member</button></div>
+          </div>
+          <div id="team-list" class="st-list"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script src="xterm.js"></script>
+  <script src="addon-fit.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
