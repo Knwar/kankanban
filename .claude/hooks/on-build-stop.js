@@ -1,17 +1,26 @@
 // SubagentStop (matcher: builder): card → in_review + build_end event.
-import { api, cardIdFromEvent, projectIdFor, readStdin } from './lib.js';
+// Only act on the card we can identify exactly — no "first in_progress card"
+// guess, which raced across concurrent builders and could flip the wrong card to
+// in_review. The reliable in_review trigger is the builder checking its last
+// acceptance criterion (handled deterministically in the daemon); a builder that
+// stops without finishing correctly stays in_progress.
+import { api, cardIdFromEvent, projectIdFor, readStdin, subagentTranscriptPath, sumTokens } from './lib.js';
 
 const data = await readStdin();
 const projectId = await projectIdFor(data.cwd ?? process.cwd());
 if (!projectId) process.exit(0);
 
-let cardId = cardIdFromEvent(data);
-if (!cardId) {
-  const board = (await api('GET', `/board?project=${projectId}`)) ?? [];
-  cardId = board.find((c) => c.lane === 'in_progress')?.id ?? null;
-}
+const cardId = cardIdFromEvent(data);
 if (!cardId) process.exit(0);
 
 const agent = data.agent_type ?? 'builder';
 await api('POST', `/task/${cardId}/move`, { lane: 'in_review', agent });
 await api('POST', '/event', { project_id: projectId, task_id: cardId, type: 'build_end', agent });
+
+// record this build run's cost: tokens from the subagent transcript; the daemon
+// adds line-churn + elapsed time.
+const tx = subagentTranscriptPath(data);
+if (tx) {
+  const { tokens, tokens_out } = sumTokens(tx);
+  if (tokens) await api('POST', `/task/${cardId}/activity`, { agent, agent_id: data.agent_id, tokens, tokens_out });
+}

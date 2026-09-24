@@ -69,13 +69,14 @@ server.registerTool(
 server.registerTool(
   'create_task',
   {
-    description: 'Create a task in the backlog. Returns {task_id}.',
+    description: 'Create a task in the backlog. Returns {task_id}. Pass phase_id to file it under a phase.',
     inputSchema: {
       project_id: z.string(),
       title: z.string(),
       tag: z.enum(['ui', 'api', 'db', 'infra']).optional(),
       requirements: z.string().optional(),
       depends_on: z.array(z.string()).optional(),
+      phase_id: z.string().optional(),
     },
   },
   (input) => api('POST', '/task', input),
@@ -125,16 +126,58 @@ server.registerTool(
 server.registerTool(
   'assign_card',
   {
-    description: 'Record dispatch: which agent owns the card, in which worktree, on which branch.',
+    description:
+      'Record dispatch: which agent owns the card, in which worktree, on which branch. Pass a team member’s name/id as `agent` (or a `skill`) and the card picks up that persona’s skill for the builder to load.',
     inputSchema: {
       task_id: z.string(),
       agent: z.string(),
       worktree_path: z.string(),
       branch: z.string(),
+      skill: z.string().optional(),
     },
   },
-  ({ task_id, agent, worktree_path, branch }) =>
-    api('PATCH', `/task/${task_id}`, { assigned_agent: agent, worktree_path, branch }),
+  ({ task_id, agent, worktree_path, branch, skill }) =>
+    api('PATCH', `/task/${task_id}`, { assigned_agent: agent, worktree_path, branch, skill }),
+);
+
+server.registerTool(
+  'delete_task',
+  {
+    description:
+      'Permanently delete a card and its history (reviews, events), and strip it from other cards’ depends_on. Irreversible — for mistakes, duplicates, and throwaways, not for finished work (move that to done).',
+    inputSchema: { task_id: z.string() },
+  },
+  ({ task_id }) => api('DELETE', `/task/${task_id}`),
+);
+
+server.registerTool(
+  'redirect_task',
+  {
+    description:
+      'Abandon a card’s current approach and reset it for a fresh start: clears the assignment/worktree/branch, resets the review-round counter and acceptance criteria, and returns it to the backlog. Pass requirements to set the new direction. Use when the approach is wrong (not just buggy) — then remove the stale worktree (kankan worktree remove <id> --force) and re-plan before redispatching.',
+    inputSchema: { task_id: z.string(), requirements: z.string().optional(), note: z.string().optional() },
+  },
+  ({ task_id, ...rest }) => api('POST', `/task/${task_id}/redirect`, rest),
+);
+
+server.registerTool(
+  'raise_blocker',
+  {
+    description:
+      'Builder tool: flag that this card needs a human decision you cannot make yourself — an ambiguous or contradictory spec, a destructive/irreversible action to confirm, a missing secret/credential, or an architectural fork the requirements don’t resolve. Pass a specific question as `reason`, then stop and end your turn. The card stays where it is and jumps to the top of the human’s Attention queue until resolved. Not for ordinary uncertainty — that belongs in your final report.',
+    inputSchema: { task_id: z.string(), reason: z.string() },
+  },
+  ({ task_id, reason }) => api('POST', `/task/${task_id}/block`, { reason, agent: 'builder' }),
+);
+
+server.registerTool(
+  'resolve_blocker',
+  {
+    description:
+      'Clear a card’s blocker once you’ve answered the builder’s question — work can resume. redirect_task and re-dispatching a builder (assign_card) already clear it; use this when you’ve just folded the decision into the card’s requirements without redispatching yet.',
+    inputSchema: { task_id: z.string(), note: z.string().optional() },
+  },
+  ({ task_id, note }) => api('POST', `/task/${task_id}/unblock`, { note }),
 );
 
 server.registerTool(
@@ -157,6 +200,178 @@ server.registerTool(
     },
   },
   ({ task_id, verdict, findings }) => api('POST', `/task/${task_id}/review`, { verdict, findings }),
+);
+
+server.registerTool(
+  'get_stats',
+  {
+    description:
+      'Per-agent project activity: cards touched, wall-clock time, lines added/removed, and tokens used (with output split). Plus project totals.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/stats?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_team',
+  {
+    description:
+      'The team roster: named agents and each one’s assigned skill (persona). Use to pick a specialized agent when dispatching a card.',
+    inputSchema: {},
+  },
+  () => api('GET', '/team'),
+);
+
+server.registerTool(
+  'create_phase',
+  {
+    description:
+      'Add a phase to the project roadmap (status planned). Returns {phase_id}. Manager mode drafts the phases; commit them here after the user approves.',
+    inputSchema: {
+      project_id: z.string(),
+      title: z.string(),
+      goal: z.string().optional(),
+      plan: z.string().optional(),
+    },
+  },
+  (input) => api('POST', '/phase', input),
+);
+
+server.registerTool(
+  'get_phases',
+  {
+    description:
+      'The project roadmap: phases with status (planned|active|done) and card progress. Empty for flat/legacy projects.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/phases?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_next_phase',
+  {
+    description: 'The next planned phase in the roadmap, or null.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/phase/next?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'advance_phase',
+  {
+    description:
+      'Scrum move: complete the active phase and activate the next planned one; returns the newly active phase, or null when the roadmap is finished. With nothing active yet it activates the first phase (kickoff). Use only when the active phase is genuinely done.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('POST', '/phase/advance', { project_id }),
+);
+
+server.registerTool(
+  'update_phase',
+  {
+    description:
+      'Park, activate, close, or reorder a roadmap phase. Activating demotes the current active phase to planned. Judgment move — use advance_phase for the normal phase loop.',
+    inputSchema: {
+      phase_id: z.string(),
+      status: z.enum(['planned', 'active', 'done']).optional(),
+      position: z.number().int().min(1).optional(),
+    },
+  },
+  ({ phase_id, status, position }) => api('POST', `/phase/${phase_id}`, { status, position }),
+);
+
+server.registerTool(
+  'create_vertical',
+  {
+    description:
+      "Create a vertical (its own board) under a workspace project. `root` = the vertical's folder: a monorepo subfolder or a separate repo (absolute path). An existing childless project at that folder is adopted. Returns {project_id, name, root_path, parent_id}.",
+    inputSchema: { workspace_project_id: z.string(), name: z.string(), root: z.string() },
+  },
+  ({ workspace_project_id, name, root }) =>
+    api('POST', '/vertical', { workspace_id: workspace_project_id, name, root }),
+);
+
+server.registerTool(
+  'list_verticals',
+  {
+    description: 'The verticals (child boards) of a workspace project.',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/verticals?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_workspace',
+  {
+    description:
+      'The workspace and all its verticals, given a workspace OR vertical project id. A standalone project returns verticals: [].',
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/workspace?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'get_workspace_summary',
+  {
+    description:
+      "Cross-board status for a whole workspace (given a workspace or vertical id): per board lane counts, active cards + agents, blockers, active phase progress, token/line totals, live session state (working/idle/needs_you/offline), and one combined attention list. The main orchestrator's 'where is everyone' read — cheaper than get_board per vertical.",
+    inputSchema: { project_id: z.string() },
+  },
+  ({ project_id }) => api('GET', `/workspace/summary?project=${encodeURIComponent(project_id)}`),
+);
+
+server.registerTool(
+  'create_subscription',
+  {
+    description:
+      'Register an outbound subscription (webhook|connector|bridge) that fires on matching board events. Returns the redacted subscription view (secret is never echoed back — only has_secret).',
+    inputSchema: {
+      project_id: z.string().optional(),
+      kind: z.enum(['webhook', 'connector', 'bridge']),
+      event_filter: z.string(),
+      target: z.string(),
+      secret: z.string().optional(),
+      scopes: z.string().optional(),
+    },
+  },
+  (input) => api('POST', '/subscriptions', input),
+);
+
+server.registerTool(
+  'list_subscriptions',
+  {
+    description: 'List subscriptions (redacted; secrets shown only as has_secret). Pass project_id to scope to one project.',
+    inputSchema: { project_id: z.string().optional() },
+  },
+  ({ project_id }) =>
+    api('GET', project_id ? `/subscriptions?project_id=${encodeURIComponent(project_id)}` : '/subscriptions'),
+);
+
+server.registerTool(
+  'get_subscription',
+  {
+    description: 'Get one subscription by id (redacted; secret shown only as has_secret).',
+    inputSchema: { id: z.string() },
+  },
+  ({ id }) => api('GET', `/subscriptions/${encodeURIComponent(id)}`),
+);
+
+server.registerTool(
+  'delete_subscription',
+  {
+    description: 'Delete a subscription by id.',
+    inputSchema: { id: z.string() },
+  },
+  ({ id }) => api('DELETE', `/subscriptions/${encodeURIComponent(id)}`),
+);
+
+server.registerTool(
+  'update_subscription',
+  {
+    description: 'Enable or disable a subscription by id. Returns the redacted subscription view.',
+    inputSchema: { id: z.string(), enabled: z.boolean() },
+  },
+  ({ id, enabled }) => api('PATCH', `/subscriptions/${encodeURIComponent(id)}`, { enabled }),
 );
 
 await server.connect(new StdioServerTransport());
